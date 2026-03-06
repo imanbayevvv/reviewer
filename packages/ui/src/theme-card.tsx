@@ -9,8 +9,9 @@ interface ThemeCardProps {
 }
 
 export function ThemeCard({ name, previewUrl, selected, onSelect }: ThemeCardProps) {
+  const slug = name.toLowerCase().replace(/\s+/g, '-');
   return (
-    <div className={clsx('flex items-center gap-4 py-4', selected && 'bg-neutral-100 rounded-xl px-4')}>
+    <div data-testid={`theme-card-${slug}`} className={clsx('flex items-center gap-4 py-4', selected && 'bg-neutral-100 rounded-xl px-4')}>
       <div className="flex-1">
         <h3 className="text-body-lg font-semibold">{name}</h3>
       </div>

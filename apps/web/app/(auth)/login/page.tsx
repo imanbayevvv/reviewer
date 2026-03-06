@@ -31,9 +31,10 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center">
       <form onSubmit={handleSubmit} className="flex w-[328px] flex-col gap-4">
         <h1 className="text-heading-lg text-center">Sign in</h1>
-        {error && <p className="text-body-sm text-red-500 text-center">{error}</p>}
+        {error && <p data-testid="login-error" className="text-body-sm text-red-500 text-center">{error}</p>}
         <Input
           label="Email"
+          name="email"
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -42,6 +43,7 @@ export default function LoginPage() {
         />
         <Input
           label="Password"
+          name="password"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}

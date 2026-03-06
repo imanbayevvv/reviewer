@@ -1,0 +1,47 @@
+/*
+ * Snapshot Mode overrides.
+ * Applied only when <html class="snapshot-mode"> is set.
+ * Disables all animations, transitions, and non-deterministic visual behaviors.
+ */
+
+.snapshot-mode *,
+.snapshot-mode *::before,
+.snapshot-mode *::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
+/* Disable specific Tailwind animations */
+.snapshot-mode .animate-pulse {
+  animation: none !important;
+  opacity: 1 !important;
+}
+
+.snapshot-mode .animate-spin {
+  animation: none !important;
+}
+
+.snapshot-mode .animate-bounce {
+  animation: none !important;
+}
+
+/* Stabilize cursor blink in inputs */
+.snapshot-mode input,
+.snapshot-mode textarea {
+  caret-color: transparent !important;
+}
+
+/* Disable smooth scrolling */
+.snapshot-mode {
+  scroll-behavior: auto !important;
+}
+
+/* Disable hover transitions for stable screenshots */
+.snapshot-mode .transition-colors,
+.snapshot-mode .transition-all,
+.snapshot-mode .transition-opacity,
+.snapshot-mode .transition {
+  transition: none !important;
+}

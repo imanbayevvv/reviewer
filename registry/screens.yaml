@@ -1,0 +1,387 @@
+# Screen Registry - Source of Truth
+# Every reviewable screen in the Resale platform
+#
+# Naming: screen_id = {flow_id}_step_{n}_{variant}
+# For non-step screens: {flow_id}_{screen_name}_{variant}
+
+screens:
+
+  # ── Auth Flow ──────────────────────────────────────────
+
+  - screen_id: auth_login_default
+    flow_id: auth
+    step: 1
+    variant: default
+    route: /login
+    preconditions:
+      auth: false
+    setup:
+      strategy: direct
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks: []
+    thresholds:
+      pixel_diff_percent: 0.5
+      structural_similarity: 0.95
+    tags: [auth, form, mvp]
+    notes: "Centered login form. Error state shows inline red text — separate variant below."
+
+  - screen_id: auth_login_error
+    flow_id: auth
+    step: 1
+    variant: error
+    route: /login
+    preconditions:
+      auth: false
+      trigger: "submit with invalid credentials"
+    setup:
+      strategy: action_sequence
+      actions:
+        - { action: fill, selector: 'input[name="email"]', value: "bad@example.com" }
+        - { action: fill, selector: 'input[name="password"]', value: "wrongpassword" }
+        - { action: click, selector: 'button[type="submit"]' }
+        - { action: wait, selector: '[data-testid="login-error"]', timeout: 5000 }
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks: []
+    thresholds:
+      pixel_diff_percent: 0.5
+      structural_similarity: 0.95
+    tags: [auth, form, error-state, mvp]
+    notes: "Login form showing error message after failed submit."
+
+  - screen_id: auth_register_default
+    flow_id: auth
+    step: 2
+    variant: default
+    route: /register
+    preconditions:
+      auth: false
+    setup:
+      strategy: direct
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks: []
+    thresholds:
+      pixel_diff_percent: 0.5
+      structural_similarity: 0.95
+    tags: [auth, form, mvp]
+    notes: "Centered registration form with name/email/password fields."
+
+  # ── Dashboard Flow ─────────────────────────────────────
+
+  - screen_id: dashboard_home_empty
+    flow_id: dashboard
+    step: 1
+    variant: empty
+    route: /dashboard
+    preconditions:
+      auth: true
+      data: "user has zero shops"
+    setup:
+      strategy: direct
+      user_type: empty
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks: []
+    thresholds:
+      pixel_diff_percent: 0.5
+      structural_similarity: 0.95
+    tags: [dashboard, empty-state, mvp]
+    notes: "Empty dashboard with 'Create a ReSale shop' CTA. Sidebar visible."
+
+  - screen_id: dashboard_home_populated
+    flow_id: dashboard
+    step: 1
+    variant: populated
+    route: /dashboard
+    preconditions:
+      auth: true
+      data: "user has 1+ shops"
+    setup:
+      strategy: direct
+      user_type: main
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks:
+      - selector: "[data-testid='shop-list']"
+        reason: "Shop names/URLs are dynamic seeded data"
+    thresholds:
+      pixel_diff_percent: 1.0
+      structural_similarity: 0.92
+    tags: [dashboard, populated, mvp]
+    notes: "Dashboard with Orders/Revenue cards and My Shops list. Sidebar shows shop nav items."
+
+  # ── Shop Creation Flow ─────────────────────────────────
+
+  - screen_id: shop_create_step_1_default
+    flow_id: shop_create
+    step: 1
+    variant: default
+    route: /shops/create
+    preconditions:
+      auth: true
+    setup:
+      strategy: direct
+      user_type: main
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks: []
+    thresholds:
+      pixel_diff_percent: 0.5
+      structural_similarity: 0.95
+    tags: [wizard, step-1, form, mvp]
+    notes: "Brand name + website URL inputs. Stepper shows 1/2. Cancel goes to dashboard."
+
+  - screen_id: shop_create_step_2_analyzing
+    flow_id: shop_create
+    step: 2
+    variant: default
+    route: /shops/create/analyzing
+    preconditions:
+      auth: true
+      data: "shop created, analysis job running"
+    setup:
+      strategy: wizard_inject
+      user_type: main
+      query_params:
+        _shopId: "{analyzingShopId}"
+      wait_for: '[data-testid="progress-loader"]'
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks:
+      - selector: "[data-testid='progress-loader']"
+        reason: "animate-pulse + dynamic step labels change over time"
+    thresholds:
+      pixel_diff_percent: 2.0
+      structural_similarity: 0.90
+    tags: [wizard, step-2, progress, flaky-risk, mvp]
+    notes: >
+      ProgressLoader with animate-pulse animation. Polls /analysis every 2s.
+      In snapshot mode: polling disabled, auto-redirect disabled.
+      Requires _shopId query param to hydrate wizard store.
+
+  - screen_id: shop_create_step_3_theme
+    flow_id: shop_create
+    step: 3
+    variant: default
+    route: /shops/create/theme
+    preconditions:
+      auth: true
+      data: "shopId in wizard store, analysis complete, themes seeded"
+    setup:
+      strategy: wizard_inject
+      user_type: main
+      query_params:
+        _shopId: "{shopId}"
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks:
+      - selector: "[data-testid='theme-preview-image']"
+        reason: "Theme preview images may differ between environments"
+    thresholds:
+      pixel_diff_percent: 1.0
+      structural_similarity: 0.93
+    tags: [wizard, step-3, themes, mvp]
+    notes: "Theme selection grid. Stepper shows 2/2. Mobile/Desktop tab toggle at bottom."
+
+  - screen_id: shop_create_step_3_theme_selected
+    flow_id: shop_create
+    step: 3
+    variant: selected
+    route: /shops/create/theme
+    preconditions:
+      auth: true
+      data: "shopId in wizard store, themes seeded, one theme clicked"
+    setup:
+      strategy: action_sequence
+      user_type: main
+      query_params:
+        _shopId: "{shopId}"
+      actions:
+        - { action: click, selector: '[data-testid="theme-card-core-resale"] button' }
+        - { action: wait, timeout: 300 }
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks:
+      - selector: "[data-testid='theme-preview-image']"
+        reason: "Theme preview images may differ between environments"
+    thresholds:
+      pixel_diff_percent: 1.0
+      structural_similarity: 0.93
+    tags: [wizard, step-3, themes, selected, mvp]
+    notes: "Theme selection with one theme highlighted + Continue button visible."
+
+  - screen_id: shop_create_step_4_setup
+    flow_id: shop_create
+    step: 4
+    variant: default
+    route: /shops/create/setup
+    preconditions:
+      auth: true
+      data: "shopId in wizard store, theme selected"
+    setup:
+      strategy: wizard_inject
+      user_type: main
+      query_params:
+        _shopId: "{shopId}"
+        _themeId: "core-resale"
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks:
+      - selector: "[data-testid='logo-uploader']"
+        reason: "File uploader preview depends on uploaded file"
+      - selector: "input[type='color']"
+        reason: "Native color picker renders differently across OS/browsers"
+    thresholds:
+      pixel_diff_percent: 1.0
+      structural_similarity: 0.93
+    tags: [wizard, step-4, setup, form, mvp]
+    notes: "Logo upload, font inputs, color pickers. Stepper shows 1/2 (re-used)."
+
+  # ── Shop Detail Flow ───────────────────────────────────
+
+  - screen_id: shop_detail_overview_active
+    flow_id: shop_detail
+    step: 1
+    variant: active
+    route: /shops/{shopId}
+    preconditions:
+      auth: true
+      data: "shop exists, status ACTIVE"
+    setup:
+      strategy: direct
+      user_type: main
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks:
+      - selector: "[data-testid='shop-name']"
+        reason: "Dynamic shop name"
+    thresholds:
+      pixel_diff_percent: 1.0
+      structural_similarity: 0.93
+    tags: [shop-detail, overview, mvp]
+    notes: "Shop detail page, Overview tab. Shows Theme/Products/Colors/Fonts cards."
+
+  - screen_id: shop_detail_overview_needs_setup
+    flow_id: shop_detail
+    step: 1
+    variant: needs_setup
+    route: /shops/{shopId}
+    preconditions:
+      auth: true
+      data: "shop exists, status DRAFT|ANALYZING|THEME_SELECTION|SETUP"
+    setup:
+      strategy: direct
+      user_type: main
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks:
+      - selector: "[data-testid='shop-name']"
+        reason: "Dynamic shop name"
+    thresholds:
+      pixel_diff_percent: 1.0
+      structural_similarity: 0.93
+    tags: [shop-detail, overview, needs-setup, mvp]
+    notes: "Shop detail with 'Finish setting up' banner + Continue Setup button."
+
+  - screen_id: shop_detail_products_empty
+    flow_id: shop_detail
+    step: 2
+    variant: empty
+    route: /shops/{shopId}
+    preconditions:
+      auth: true
+      data: "shop exists, zero products, Products tab active"
+    setup:
+      strategy: action_sequence
+      user_type: main
+      actions:
+        - { action: click, selector: '[data-testid="tab-products"]' }
+        - { action: wait, timeout: 500 }
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks: []
+    thresholds:
+      pixel_diff_percent: 0.5
+      structural_similarity: 0.95
+    tags: [shop-detail, products, empty-state, mvp]
+    notes: >
+      Products tab showing 'No products yet' with Add Product button.
+      Uses draft shop (no products). Action: click Products tab.
+
+  - screen_id: shop_detail_products_populated
+    flow_id: shop_detail
+    step: 2
+    variant: populated
+    route: /shops/{shopId}
+    preconditions:
+      auth: true
+      data: "shop exists, 1+ products, Products tab active"
+    setup:
+      strategy: action_sequence
+      user_type: main
+      actions:
+        - { action: click, selector: '[data-testid="tab-products"]' }
+        - { action: wait, timeout: 500 }
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks:
+      - selector: "[data-testid='product-list']"
+        reason: "Product titles/prices are dynamic seeded data"
+    thresholds:
+      pixel_diff_percent: 1.0
+      structural_similarity: 0.92
+    tags: [shop-detail, products, populated, mvp]
+    notes: "Products tab showing product list items. Action: click Products tab."
+
+  # ── Settings ───────────────────────────────────────────
+
+  - screen_id: settings_default
+    flow_id: settings
+    step: 1
+    variant: default
+    route: /settings
+    preconditions:
+      auth: true
+    setup:
+      strategy: direct
+      user_type: main
+    figma:
+      file_key: "TODO_FIGMA_FILE_KEY"
+      node_id: "TODO_FIGMA_NODE_ID"
+    viewport: { width: 1440, height: 900 }
+    masks: []
+    thresholds:
+      pixel_diff_percent: 0.5
+      structural_similarity: 0.95
+    tags: [settings, placeholder, excluded-mvp]
+    notes: "Placeholder settings page with Sign Out button. Low priority for review."

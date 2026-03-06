@@ -9,6 +9,7 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:reviewer": "tsx prisma/seed-reviewer.ts",
     "db:generate": "prisma generate"
   },
   "dependencies": {

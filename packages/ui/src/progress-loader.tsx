@@ -8,7 +8,7 @@ interface ProgressLoaderProps {
 
 export function ProgressLoader({ label, completedSteps = [], className }: ProgressLoaderProps) {
   return (
-    <div className={clsx('flex flex-col items-center gap-6', className)}>
+    <div data-testid="progress-loader" className={clsx('flex flex-col items-center gap-6', className)}>
       <div className="h-[200px] w-[200px] rounded-[36px] bg-neutral-300 animate-pulse" />
       <p className="text-heading-lg">{label}</p>
       {completedSteps.length > 0 && (

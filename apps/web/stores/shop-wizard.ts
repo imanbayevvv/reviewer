@@ -19,6 +19,7 @@ interface ShopWizardState {
   setFonts: (headline: string, body: string) => void;
   setColors: (primary: string, secondary: string) => void;
   reset: () => void;
+  hydrateFromSnapshot: (params: { shopId?: string; themeId?: string }) => void;
 }
 
 const initialState = {
@@ -48,4 +49,10 @@ export const useShopWizard = create<ShopWizardState>((set) => ({
   setFonts: (headlineFont, bodyFont) => set({ headlineFont, bodyFont }),
   setColors: (primaryColor, secondaryColor) => set({ primaryColor, secondaryColor }),
   reset: () => set(initialState),
+
+  /** Hydrate from snapshot query params — used by reviewer pipeline */
+  hydrateFromSnapshot: (params: { shopId?: string; themeId?: string }) => {
+    if (params.shopId) set({ shopId: params.shopId });
+    if (params.themeId) set({ themeId: params.themeId });
+  },
 }));

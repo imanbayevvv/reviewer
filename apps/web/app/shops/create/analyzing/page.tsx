@@ -7,6 +7,7 @@ import { Stepper, ProgressLoader } from '@resale/ui';
 import { api } from '@/lib/api-client';
 import { useShopWizard } from '@/stores/shop-wizard';
 import { queryKeys } from '@/lib/query-keys';
+import { isSnapshotMode } from '@/lib/snapshot-mode';
 import type { ShopAnalysisDto } from '@resale/contracts';
 
 const STEP_LABELS: Record<string, string> = {
@@ -26,12 +27,14 @@ const STEP_DONE_LABELS: Record<string, string> = {
 export default function AnalyzingPage() {
   const router = useRouter();
   const { shopId } = useShopWizard();
+  const snapshot = isSnapshotMode();
 
   const { data: analysis } = useQuery({
     queryKey: queryKeys.shopAnalysis(shopId || ''),
     queryFn: () => api.get<ShopAnalysisDto>(`/api/shops/${shopId}/analysis`),
     enabled: !!shopId,
-    refetchInterval: 2000,
+    // In snapshot mode: fetch once, no polling
+    refetchInterval: snapshot ? false : 2000,
   });
 
   const steps = analysis?.steps ?? [];
@@ -40,11 +43,13 @@ export default function AnalyzingPage() {
   const allDone = steps.length > 0 && steps.every((s) => s.status === 'DONE');
 
   useEffect(() => {
+    // In snapshot mode: never auto-redirect
+    if (snapshot) return;
     if (allDone) {
       const timer = setTimeout(() => router.push('/shops/create/theme'), 1000);
       return () => clearTimeout(timer);
     }
-  }, [allDone, router]);
+  }, [allDone, router, snapshot]);
 
   if (!shopId) {
     router.push('/shops/create');

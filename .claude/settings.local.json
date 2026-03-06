@@ -13,7 +13,13 @@
       "Bash(npx prisma:*)",
       "Bash(cp:*)",
       "Bash(npx tsx:*)",
-      "Bash(npx next:*)"
+      "Bash(npx next:*)",
+      "Bash(FIGMA_TOKEN=test npx tsx:*)",
+      "Bash(pnpm reviewer:list:*)",
+      "Bash(ls:*)",
+      "Bash(FIGMA_TOKEN=test pnpm reviewer:figma:*)",
+      "Bash(pnpm add:*)",
+      "Bash(node:*)"
     ]
   }
 }

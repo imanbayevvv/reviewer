@@ -18,6 +18,7 @@ export function Tabs({ tabs, value, onChange, className }: TabsProps) {
       {tabs.map((tab) => (
         <button
           key={tab.value}
+          data-testid={`tab-${tab.value}`}
           onClick={() => onChange(tab.value)}
           className={clsx(
             'rounded-md px-4 py-2 text-body-md transition-colors',

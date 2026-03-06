@@ -1,0 +1,195 @@
+# Flow Registry - Navigation Graphs
+# Describes transitions between screens for review pipeline
+
+flows:
+
+  # ── Auth Flow ──────────────────────────────────────────
+  - flow_id: auth
+    title: "Authentication"
+    entry_route: /login
+    nodes:
+      - id: login
+        screen_id: auth_login_default
+        route: /login
+      - id: register
+        screen_id: auth_register_default
+        route: /register
+      - id: dashboard
+        screen_id: dashboard_home_empty
+        route: /dashboard
+    edges:
+      - from: login
+        to: dashboard
+        trigger: "successful login"
+        type: next
+      - from: login
+        to: register
+        trigger: "click 'Register' link"
+        type: alternate
+      - from: register
+        to: dashboard
+        trigger: "successful registration"
+        type: next
+      - from: register
+        to: login
+        trigger: "click 'Sign in' link"
+        type: alternate
+      - from: login
+        to: login
+        trigger: "invalid credentials"
+        type: error
+        notes: "Shows inline error, stays on same screen"
+
+  # ── Dashboard Flow ─────────────────────────────────────
+  - flow_id: dashboard
+    title: "Dashboard"
+    entry_route: /dashboard
+    nodes:
+      - id: home_empty
+        screen_id: dashboard_home_empty
+        route: /dashboard
+      - id: home_populated
+        screen_id: dashboard_home_populated
+        route: /dashboard
+      - id: create_shop
+        screen_id: shop_create_step_1_default
+        route: /shops/create
+      - id: shop_detail
+        screen_id: shop_detail_overview_active
+        route: /shops/{shopId}
+    edges:
+      - from: home_empty
+        to: create_shop
+        trigger: "click 'Get Started'"
+        type: next
+      - from: home_populated
+        to: create_shop
+        trigger: "click '+ New Shop'"
+        type: alternate
+      - from: home_populated
+        to: shop_detail
+        trigger: "click shop row"
+        type: next
+    notes: >
+      Dashboard shows empty or populated variant based on shops count.
+      Both variants are data-driven — determined by API response.
+
+  # ── Shop Creation Wizard ───────────────────────────────
+  - flow_id: shop_create
+    title: "Create a ReSale Shop"
+    entry_route: /shops/create
+    nodes:
+      - id: step_1_brand
+        screen_id: shop_create_step_1_default
+        route: /shops/create
+      - id: step_2_analyzing
+        screen_id: shop_create_step_2_analyzing
+        route: /shops/create/analyzing
+      - id: step_3_theme
+        screen_id: shop_create_step_3_theme
+        route: /shops/create/theme
+      - id: step_4_setup
+        screen_id: shop_create_step_4_setup
+        route: /shops/create/setup
+      - id: done
+        screen_id: dashboard_home_populated
+        route: /dashboard
+    edges:
+      - from: step_1_brand
+        to: step_2_analyzing
+        trigger: "submit brand form (creates shop + starts analysis)"
+        type: next
+      - from: step_2_analyzing
+        to: step_3_theme
+        trigger: "auto-redirect when all analysis steps DONE"
+        type: next
+        notes: "Automatic transition after ~1s delay post-completion"
+      - from: step_3_theme
+        to: step_4_setup
+        trigger: "select theme + click Continue"
+        type: next
+      - from: step_4_setup
+        to: done
+        trigger: "click Continue (uploads logo, patches shop, sets ACTIVE)"
+        type: next
+      - from: step_1_brand
+        to: done
+        trigger: "click Cancel"
+        type: alternate
+        notes: "Returns to dashboard without creating shop"
+      - from: step_3_theme
+        to: step_2_analyzing
+        trigger: "click Back"
+        type: alternate
+        uncertain: true
+        notes: "Back button goes to router.back() — depends on history"
+      - from: step_4_setup
+        to: step_3_theme
+        trigger: "click Back"
+        type: alternate
+        uncertain: true
+        notes: "Back button goes to router.back() — depends on history"
+
+  # ── Shop Detail ────────────────────────────────────────
+  - flow_id: shop_detail
+    title: "Shop Detail"
+    entry_route: /shops/{shopId}
+    nodes:
+      - id: overview
+        screen_id: shop_detail_overview_active
+        route: /shops/{shopId}
+      - id: overview_setup
+        screen_id: shop_detail_overview_needs_setup
+        route: /shops/{shopId}
+      - id: products_empty
+        screen_id: shop_detail_products_empty
+        route: /shops/{shopId}
+      - id: products_populated
+        screen_id: shop_detail_products_populated
+        route: /shops/{shopId}
+      - id: dashboard
+        screen_id: dashboard_home_populated
+        route: /dashboard
+    edges:
+      - from: overview
+        to: products_empty
+        trigger: "click Products tab"
+        type: alternate
+      - from: overview
+        to: products_populated
+        trigger: "click Products tab (has products)"
+        type: alternate
+      - from: products_empty
+        to: overview
+        trigger: "click Overview tab"
+        type: alternate
+      - from: overview_setup
+        to: overview
+        trigger: "same screen, different data state"
+        type: data_variant
+      - from: overview
+        to: dashboard
+        trigger: "delete shop"
+        type: next
+      - from: overview_setup
+        to: shop_create_step_1_default
+        trigger: "click Continue Setup (status=DRAFT)"
+        type: next
+        notes: "Resumes wizard at appropriate step based on shop.status"
+
+  # ── Settings ───────────────────────────────────────────
+  - flow_id: settings
+    title: "Settings"
+    entry_route: /settings
+    nodes:
+      - id: settings_main
+        screen_id: settings_default
+        route: /settings
+      - id: login
+        screen_id: auth_login_default
+        route: /login
+    edges:
+      - from: settings_main
+        to: login
+        trigger: "click Sign out"
+        type: next
