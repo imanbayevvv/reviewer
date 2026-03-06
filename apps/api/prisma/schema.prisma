@@ -1,0 +1,235 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  SELLER
+}
+
+enum ShopStatus {
+  DRAFT
+  ANALYZING
+  THEME_SELECTION
+  SETUP
+  ACTIVE
+  PAUSED
+}
+
+enum AnalysisStepStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+enum ProductStatus {
+  DRAFT
+  PUBLISHED
+  SOLD
+  ARCHIVED
+}
+
+enum ReviewJobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+enum PatchStatus {
+  PROPOSED
+  ACCEPTED
+  REJECTED
+}
+
+// ─── Auth ────────────────────────────────────────────────────
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         UserRole  @default(SELLER)
+  createdAt    DateTime  @default(now())
+  sessions     Session[]
+  shops        Shop[]
+  mediaAssets  MediaAsset[]
+  eventLogs    EventLog[] @relation("actor")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  refreshToken String   @unique
+  userAgent    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Shop ────────────────────────────────────────────────────
+
+model Shop {
+  id             String     @id @default(cuid())
+  ownerId        String
+  name           String
+  slug           String     @unique
+  websiteUrl     String
+  themeId        String?
+  logoUrl        String?
+  primaryColor   String?
+  secondaryColor String?
+  headlineFont   String?
+  bodyFont       String?
+  status         ShopStatus @default(DRAFT)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  owner          User       @relation(fields: [ownerId], references: [id])
+  theme          Theme?     @relation(fields: [themeId], references: [id])
+  products       Product[]
+  analysisSteps  ShopAnalysisStep[]
+  snapshots      DesignSnapshot[]
+}
+
+model ShopAnalysisStep {
+  id        String              @id @default(cuid())
+  shopId    String
+  step      String              // FONTS, COLORS, LOGO, WEBSITE
+  status    AnalysisStepStatus  @default(PENDING)
+  result    Json?
+  createdAt DateTime            @default(now())
+  shop      Shop                @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, step])
+}
+
+model Theme {
+  id             String  @id @default(cuid())
+  name           String
+  slug           String  @unique
+  previewDesktop String?
+  previewMobile  String?
+  isDefault      Boolean @default(false)
+  shops          Shop[]
+}
+
+// ─── Products ────────────────────────────────────────────────
+
+model Product {
+  id          String        @id @default(cuid())
+  shopId      String
+  title       String
+  description String?
+  price       Float
+  currency    String        @default("USD")
+  sku         String?
+  status      ProductStatus @default(DRAFT)
+  categoryId  String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  shop        Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  category    Category?     @relation(fields: [categoryId], references: [id])
+}
+
+model Category {
+  id       String     @id @default(cuid())
+  shopId   String
+  name     String
+  slug     String
+  parentId String?
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@unique([shopId, slug])
+}
+
+// ─── Media ───────────────────────────────────────────────────
+
+model MediaAsset {
+  id         String   @id @default(cuid())
+  ownerId    String
+  entityType String
+  entityId   String
+  url        String
+  s3Key      String
+  mimeType   String
+  sizeBytes  Int
+  createdAt  DateTime @default(now())
+  owner      User     @relation(fields: [ownerId], references: [id])
+
+  @@index([entityType, entityId])
+}
+
+// ─── Reviewer ────────────────────────────────────────────────
+
+model DesignSnapshot {
+  id            String      @id @default(cuid())
+  shopId        String
+  source        String
+  version       Int         @default(autoincrement())
+  metadata      Json?
+  treeUrl       String?
+  screenshotUrl String?
+  createdAt     DateTime    @default(now())
+  shop          Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  reviewJobs    ReviewJob[]
+}
+
+model ReviewJob {
+  id          String          @id @default(cuid())
+  snapshotId  String
+  type        String          // SCREEN, FLOW, COMPONENT
+  status      ReviewJobStatus @default(QUEUED)
+  input       Json?
+  result      Json?
+  score       Float?
+  createdAt   DateTime        @default(now())
+  completedAt DateTime?
+  snapshot    DesignSnapshot  @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  issues      ReviewIssue[]
+}
+
+model ReviewIssue {
+  id          String        @id @default(cuid())
+  reviewJobId String
+  severity    String        // INFO, WARNING, ERROR
+  category    String
+  message     String
+  nodeRef     String?
+  suggestion  String?
+  reviewJob   ReviewJob     @relation(fields: [reviewJobId], references: [id], onDelete: Cascade)
+  patches     ReviewPatch[]
+}
+
+model ReviewPatch {
+  id        String      @id @default(cuid())
+  issueId   String
+  patchType String
+  payload   Json
+  status    PatchStatus @default(PROPOSED)
+  createdAt DateTime    @default(now())
+  issue     ReviewIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+}
+
+// ─── Event Log (outbox) ──────────────────────────────────────
+
+model EventLog {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  action     String
+  payload    Json?
+  actorId    String?
+  createdAt  DateTime @default(now())
+  actor      User?    @relation("actor", fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:localhost)",
+      "Bash(curl:*)",
+      "Bash(echo:*)",
+      "Bash(wmic process:*)",
+      "Bash(powershell:*)",
+      "Bash(pnpm install:*)",
+      "Bash(npm:*)",
+      "Bash(docker compose:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx prisma:*)",
+      "Bash(cp:*)",
+      "Bash(npx tsx:*)",
+      "Bash(npx next:*)"
+    ]
+  }
+}
