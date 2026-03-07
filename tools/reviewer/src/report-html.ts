@@ -27,6 +27,16 @@ function statusBadge(status: string): string {
   return `<span style="display:inline-block;padding:2px 10px;border-radius:4px;background:${bg};color:#fff;font-size:12px;font-weight:600;text-transform:uppercase">${status}</span>`;
 }
 
+function driftBadge(drift: string | undefined): string {
+  if (!drift || drift === 'none') return '';
+  const colors: Record<string, { bg: string; label: string }> = {
+    real_drift: { bg: '#7c3aed', label: 'REAL DRIFT' },
+    noise: { bg: '#6b7280', label: 'NOISE' },
+  };
+  const { bg, label } = colors[drift] ?? { bg: '#6b7280', label: drift.toUpperCase() };
+  return `<span style="display:inline-block;padding:2px 10px;border-radius:4px;background:${bg};color:#fff;font-size:12px;font-weight:600;margin-left:4px">${label}</span>`;
+}
+
 function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -78,7 +88,7 @@ function screenCard(r: ScreenDiffResult): string {
   return `
   <div id="${r.screen_id}" style="border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:16px;${r.status === 'fail' ? 'border-left:4px solid #ef4444' : ''}">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-      ${statusBadge(r.status)}
+      ${statusBadge(r.status)}${driftBadge(r.drift_classification)}
       <span style="font-weight:600;font-size:14px">${escHtml(r.screen_id)}</span>
       <span style="font-size:12px;color:#6b7280">mismatch: ${pct} | similarity: ${sim} | masked: ${masked} | ${r.timing.duration_ms}ms</span>
     </div>
@@ -109,7 +119,10 @@ export function generateReport(manifest: DiffManifest): string {
       <div style="color:#6b7280"><span style="font-weight:600">${cov.disabled}</span> disabled</div>
       <div><span style="font-weight:600">${manifest.total_screens}</span> processed this run</div>
     </div>
-    ${cov.unconfigured_ids.length > 0 ? `<div style="margin-top:8px;font-size:11px;color:#92400e">Unconfigured: ${cov.unconfigured_ids.map(id => `<code>${escHtml(id)}</code>`).join(', ')}</div>` : ''}
+    ${cov.unconfigured_entries && cov.unconfigured_entries.length > 0 ? `<div style="margin-top:8px;font-size:11px;color:#92400e">
+        <div style="font-weight:600;margin-bottom:4px">Unconfigured screens:</div>
+        ${cov.unconfigured_entries.map(e => `<div style="margin-left:8px"><code>${escHtml(e.screen_id)}</code> — ${escHtml(e.reason)}</div>`).join('')}
+      </div>` : (cov.unconfigured_ids.length > 0 ? `<div style="margin-top:8px;font-size:11px;color:#92400e">Unconfigured: ${cov.unconfigured_ids.map(id => `<code>${escHtml(id)}</code>`).join(', ')}</div>` : '')}
     ${cov.disabled_ids.length > 0 ? `<div style="margin-top:4px;font-size:11px;color:#6b7280">Disabled: ${cov.disabled_ids.map(id => `<code>${escHtml(id)}</code>`).join(', ')}</div>` : ''}
   </div>` : '';
 
@@ -187,6 +200,21 @@ export function generateReport(manifest: DiffManifest): string {
   </div>
 
   ${coverageHtml}
+
+  ${(() => {
+    const driftScreens = manifest.screens.filter(s => s.drift_classification === 'real_drift');
+    const noiseScreens = manifest.screens.filter(s => s.drift_classification === 'noise');
+    if (driftScreens.length === 0 && noiseScreens.length === 0) return '';
+    return `<div style="margin-bottom:24px;padding:16px;background:#fff;border:1px solid #e5e7eb;border-radius:8px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:8px">Drift Classification</div>
+      <div style="display:flex;gap:24px;font-size:13px">
+        ${driftScreens.length > 0 ? `<div style="color:#7c3aed"><span style="font-weight:600">${driftScreens.length}</span> real drift (design != implementation)</div>` : ''}
+        ${noiseScreens.length > 0 ? `<div style="color:#6b7280"><span style="font-weight:600">${noiseScreens.length}</span> noise (expected differences)</div>` : ''}
+        <div style="color:#16a34a"><span style="font-weight:600">${manifest.screens.filter(s => s.status === 'pass').length}</span> passing</div>
+      </div>
+      ${driftScreens.length > 0 ? `<div style="margin-top:8px;font-size:11px;color:#7c3aed">Real drift: ${driftScreens.map(s => `<a href="#${s.screen_id}" style="color:#7c3aed"><code>${escHtml(s.screen_id)}</code></a>`).join(', ')}</div>` : ''}
+    </div>`;
+  })()}
 
   <div style="display:flex;gap:24px">
     <!-- TOC sidebar -->

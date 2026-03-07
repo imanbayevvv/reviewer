@@ -32,6 +32,7 @@ screens:
       structural_similarity: 0.95
     tags: [auth, form, mvp]
     notes: "Centered login form. Error state shows inline red text — separate variant below."
+    unconfigured_reason: "No auth screens exist in Figma file — not yet designed"
 
   - screen_id: auth_login_error
     flow_id: auth
@@ -58,6 +59,7 @@ screens:
       structural_similarity: 0.95
     tags: [auth, form, error-state, mvp]
     notes: "Login form showing error message after failed submit."
+    unconfigured_reason: "No auth screens exist in Figma file — not yet designed"
 
   - screen_id: auth_register_default
     flow_id: auth
@@ -78,6 +80,7 @@ screens:
       structural_similarity: 0.95
     tags: [auth, form, mvp]
     notes: "Centered registration form with name/email/password fields."
+    unconfigured_reason: "No auth screens exist in Figma file — not yet designed"
 
   # ── Dashboard Flow ─────────────────────────────────────
 
@@ -102,6 +105,7 @@ screens:
       structural_similarity: 0.95
     tags: [dashboard, empty-state, mvp]
     notes: "Empty dashboard with 'Create a ReSale shop' CTA. Sidebar visible."
+    unconfigured_reason: "Only populated dashboard variant exists in Figma (node 24:45) — no empty state designed"
 
   - screen_id: dashboard_home_populated
     reviewer_enabled: false
@@ -211,6 +215,7 @@ screens:
       pixel_diff_percent: 1.0
       structural_similarity: 0.93
     tags: [wizard, step-3, themes, mvp]
+    drift_classification: real_drift
     notes: >
       Theme selection grid. Stepper shows 2/2. Mobile/Desktop tab toggle at bottom.
       KNOWN DRIFT: Figma shows Mobile preview mode with phone mockup layout.
@@ -246,6 +251,7 @@ screens:
       pixel_diff_percent: 1.0
       structural_similarity: 0.93
     tags: [wizard, step-3, themes, selected, mvp]
+    drift_classification: real_drift
     notes: >
       Theme selection with one theme highlighted + Continue button visible.
       KNOWN DRIFT: Same layout mismatch as step_3_theme — Figma shows phone mockup, runtime shows flat list.
@@ -279,6 +285,7 @@ screens:
       pixel_diff_percent: 1.0
       structural_similarity: 0.93
     tags: [wizard, step-4, setup, form, mvp]
+    drift_classification: real_drift
     notes: >
       Logo upload, font inputs, color pickers. Stepper shows 1/2 (re-used).
       KNOWN DRIFT: Figma shows 3-column layout with live phone preview.
@@ -309,6 +316,7 @@ screens:
       structural_similarity: 0.93
     tags: [shop-detail, overview, mvp]
     notes: "Shop detail page, Overview tab. Shows Theme/Products/Colors/Fonts cards."
+    unconfigured_reason: "No shop detail screens exist in Figma file — not yet designed"
 
   - screen_id: shop_detail_overview_needs_setup
     flow_id: shop_detail
@@ -333,6 +341,7 @@ screens:
       structural_similarity: 0.93
     tags: [shop-detail, overview, needs-setup, mvp]
     notes: "Shop detail with 'Finish setting up' banner + Continue Setup button."
+    unconfigured_reason: "No shop detail screens exist in Figma file — not yet designed"
 
   - screen_id: shop_detail_products_empty
     flow_id: shop_detail
@@ -360,6 +369,7 @@ screens:
     notes: >
       Products tab showing 'No products yet' with Add Product button.
       Uses draft shop (no products). Action: click Products tab.
+    unconfigured_reason: "No shop detail screens exist in Figma file — not yet designed"
 
   - screen_id: shop_detail_products_populated
     flow_id: shop_detail
@@ -387,6 +397,7 @@ screens:
       structural_similarity: 0.92
     tags: [shop-detail, products, populated, mvp]
     notes: "Products tab showing product list items. Action: click Products tab."
+    unconfigured_reason: "No shop detail screens exist in Figma file — not yet designed"
 
   # ── Settings ───────────────────────────────────────────
 
@@ -410,3 +421,4 @@ screens:
       structural_similarity: 0.95
     tags: [settings, placeholder, excluded-mvp]
     notes: "Placeholder settings page with Sign Out button. Low priority for review."
+    unconfigured_reason: "Settings page is not designed in Figma — placeholder only"

@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { FIGMA_STORAGE, RUNTIME_STORAGE, RUNS_STORAGE } from './config.js';
-import type { Screen, RegistryCoverage } from './registry.js';
+import type { Screen, RegistryCoverage, DriftClassification } from './registry.js';
 import { readPng, writePng, compareImages, createOverlay, resizeNearest, type ImageData } from './image-ops.js';
 import { resolveMasks, type MaskBox, type ResolvedMask } from './masking.js';
 import { computeMetrics, evaluateThresholds, type DiffStatus, type ScoringResult } from './scoring.js';
@@ -25,6 +25,7 @@ import { ensureDir, isoNow } from './utils.js';
 export interface ScreenDiffResult {
   screen_id: string;
   status: DiffStatus;
+  drift_classification: DriftClassification;
   figma_artifact: string | null;
   runtime_artifact: string | null;
   diff_artifact: string | null;
@@ -205,6 +206,7 @@ export function diffScreen(screen: Screen, runId: string): ScreenDiffResult {
   const result: ScreenDiffResult = {
     screen_id: screen.screen_id,
     status: scoring.status,
+    drift_classification: screen.drift_classification ?? 'none',
     figma_artifact: figmaPath,
     runtime_artifact: runtimePath,
     diff_artifact: diffPngPath,
@@ -311,6 +313,7 @@ function makeResult(
   return {
     screen_id: screen.screen_id,
     status: 'skipped',
+    drift_classification: screen.drift_classification ?? 'none',
     figma_artifact: null,
     runtime_artifact: null,
     diff_artifact: null,

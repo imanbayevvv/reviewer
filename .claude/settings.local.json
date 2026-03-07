@@ -23,7 +23,9 @@
       "Bash(pnpm exec:*)",
       "Bash(xargs grep:*)",
       "Bash(python3:*)",
-      "Bash(pnpm:*)"
+      "Bash(pnpm:*)",
+      "Bash(source .env:*)",
+      "Bash(npx:*)"
     ]
   }
 }

@@ -46,6 +46,8 @@ export interface ScreenSetup {
   wait_for?: string;
 }
 
+export type DriftClassification = 'none' | 'noise' | 'real_drift';
+
 export interface Screen {
   screen_id: string;
   flow_id: string;
@@ -62,6 +64,10 @@ export interface Screen {
   notes?: string;
   /** Explicitly disable this screen from reviewer runs */
   reviewer_enabled?: boolean;
+  /** Pre-classified drift expectation for this screen */
+  drift_classification?: DriftClassification;
+  /** Why this screen is unconfigured (no Figma node, not designed, etc.) */
+  unconfigured_reason?: string;
 }
 
 // ── Readiness ────────────────────────────────────────────
@@ -82,6 +88,11 @@ export function isScreenReady(screen: Screen): boolean {
   return getScreenReadiness(screen) === 'ready';
 }
 
+export interface UnconfiguredEntry {
+  screen_id: string;
+  reason: string;
+}
+
 export interface RegistryCoverage {
   total: number;
   ready: number;
@@ -90,16 +101,24 @@ export interface RegistryCoverage {
   ready_ids: string[];
   unconfigured_ids: string[];
   disabled_ids: string[];
+  unconfigured_entries: UnconfiguredEntry[];
 }
 
 export function getRegistryCoverage(screens: Screen[]): RegistryCoverage {
   const ready_ids: string[] = [];
   const unconfigured_ids: string[] = [];
   const disabled_ids: string[] = [];
+  const unconfigured_entries: UnconfiguredEntry[] = [];
   for (const s of screens) {
     const r = getScreenReadiness(s);
     if (r === 'ready') ready_ids.push(s.screen_id);
-    else if (r === 'unconfigured') unconfigured_ids.push(s.screen_id);
+    else if (r === 'unconfigured') {
+      unconfigured_ids.push(s.screen_id);
+      unconfigured_entries.push({
+        screen_id: s.screen_id,
+        reason: s.unconfigured_reason || 'No Figma node_id configured',
+      });
+    }
     else disabled_ids.push(s.screen_id);
   }
   return {
@@ -110,6 +129,7 @@ export function getRegistryCoverage(screens: Screen[]): RegistryCoverage {
     ready_ids,
     unconfigured_ids,
     disabled_ids,
+    unconfigured_entries,
   };
 }
 
