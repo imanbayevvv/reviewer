@@ -158,6 +158,9 @@ importers:
       commander:
         specifier: ^12.1.0
         version: 12.1.0
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
       pixelmatch:
         specifier: ^7.1.0
         version: 7.1.0

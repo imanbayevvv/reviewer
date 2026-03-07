@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { parse } from 'yaml';
-import { SCREENS_YAML, FLOWS_YAML } from './config.js';
+import { SCREENS_YAML, FLOWS_YAML, FIGMA_PLACEHOLDER_FILE_KEY, FIGMA_PLACEHOLDER_NODE_ID } from './config.js';
 
 // ── Types ────────────────────────────────────────────────
 
@@ -60,6 +60,57 @@ export interface Screen {
   thresholds: ScreenThresholds;
   tags: string[];
   notes?: string;
+  /** Explicitly disable this screen from reviewer runs */
+  reviewer_enabled?: boolean;
+}
+
+// ── Readiness ────────────────────────────────────────────
+
+export type ScreenReadiness = 'ready' | 'unconfigured' | 'disabled';
+
+/** Determine if a screen is ready for reviewer pipeline */
+export function getScreenReadiness(screen: Screen): ScreenReadiness {
+  // Explicit disable takes priority
+  if (screen.reviewer_enabled === false) return 'disabled';
+  // Placeholder or missing figma refs → unconfigured
+  if (!screen.figma.file_key || screen.figma.file_key === FIGMA_PLACEHOLDER_FILE_KEY) return 'unconfigured';
+  if (!screen.figma.node_id || screen.figma.node_id === FIGMA_PLACEHOLDER_NODE_ID) return 'unconfigured';
+  return 'ready';
+}
+
+export function isScreenReady(screen: Screen): boolean {
+  return getScreenReadiness(screen) === 'ready';
+}
+
+export interface RegistryCoverage {
+  total: number;
+  ready: number;
+  unconfigured: number;
+  disabled: number;
+  ready_ids: string[];
+  unconfigured_ids: string[];
+  disabled_ids: string[];
+}
+
+export function getRegistryCoverage(screens: Screen[]): RegistryCoverage {
+  const ready_ids: string[] = [];
+  const unconfigured_ids: string[] = [];
+  const disabled_ids: string[] = [];
+  for (const s of screens) {
+    const r = getScreenReadiness(s);
+    if (r === 'ready') ready_ids.push(s.screen_id);
+    else if (r === 'unconfigured') unconfigured_ids.push(s.screen_id);
+    else disabled_ids.push(s.screen_id);
+  }
+  return {
+    total: screens.length,
+    ready: ready_ids.length,
+    unconfigured: unconfigured_ids.length,
+    disabled: disabled_ids.length,
+    ready_ids,
+    unconfigured_ids,
+    disabled_ids,
+  };
 }
 
 export interface FlowNode {

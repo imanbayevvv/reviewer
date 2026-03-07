@@ -42,12 +42,49 @@ export interface MaskResult {
 // ── Resolve ──────────────────────────────────────────────
 
 /**
+ * Normalize legacy single-box format to array.
+ * Runtime metadata may contain either a single MaskBox or MaskBox[] per selector.
+ */
+function normalizeBoxes(raw: MaskBox | MaskBox[] | undefined): MaskBox[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  return [raw];
+}
+
+/**
+ * Paint a single box onto the mask buffer. Returns number of newly masked pixels.
+ */
+function paintBox(
+  buffer: Uint8Array,
+  box: MaskBox,
+  imageWidth: number,
+  imageHeight: number,
+): number {
+  const x0 = Math.max(0, Math.round(box.x));
+  const y0 = Math.max(0, Math.round(box.y));
+  const x1 = Math.min(imageWidth, Math.round(box.x + box.w));
+  const y1 = Math.min(imageHeight, Math.round(box.y + box.h));
+
+  let pixelsMasked = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const idx = y * imageWidth + x;
+      if (buffer[idx] === 0) {
+        buffer[idx] = 255;
+        pixelsMasked++;
+      }
+    }
+  }
+  return pixelsMasked;
+}
+
+/**
  * Resolve registry masks to bounding boxes using runtime metadata.
- * Runtime metadata should contain `mask_boxes` array captured during screenshot.
+ * Runtime metadata contains `mask_boxes` — either a single box or array of boxes per selector.
  */
 export function resolveMasks(
   registryMasks: ScreenMask[],
-  runtimeMaskBoxes: Record<string, MaskBox> | undefined,
+  runtimeMaskBoxes: Record<string, MaskBox | MaskBox[]> | undefined,
   imageWidth: number,
   imageHeight: number,
 ): MaskResult {
@@ -58,9 +95,9 @@ export function resolveMasks(
   let totalMaskedPixels = 0;
 
   for (const mask of registryMasks) {
-    const box = runtimeMaskBoxes?.[mask.selector] ?? null;
+    const boxes = normalizeBoxes(runtimeMaskBoxes?.[mask.selector]);
 
-    if (!box) {
+    if (boxes.length === 0) {
       warnings.push(`Mask "${mask.selector}" unresolved — no bounding box in runtime metadata. Excluded from masking.`);
       resolved.push({
         selector: mask.selector,
@@ -72,31 +109,23 @@ export function resolveMasks(
       continue;
     }
 
-    // Clamp box to image bounds
-    const x0 = Math.max(0, Math.round(box.x));
-    const y0 = Math.max(0, Math.round(box.y));
-    const x1 = Math.min(imageWidth, Math.round(box.x + box.w));
-    const y1 = Math.min(imageHeight, Math.round(box.y + box.h));
-
     let pixelsMasked = 0;
-    for (let y = y0; y < y1; y++) {
-      for (let x = x0; x < x1; x++) {
-        const idx = y * imageWidth + x;
-        if (buffer[idx] === 0) {
-          buffer[idx] = 255;
-          pixelsMasked++;
-        }
-      }
+    for (const box of boxes) {
+      pixelsMasked += paintBox(buffer, box, imageWidth, imageHeight);
     }
 
     totalMaskedPixels += pixelsMasked;
     resolved.push({
       selector: mask.selector,
       reason: mask.reason,
-      box,
+      box: boxes.length === 1 ? boxes[0] : boxes[0], // primary box for report display
       source: 'runtime_metadata',
       pixels_masked: pixelsMasked,
     });
+
+    if (boxes.length > 1) {
+      warnings.push(`Mask "${mask.selector}" resolved to ${boxes.length} elements (${pixelsMasked}px total)`);
+    }
   }
 
   return { buffer, totalMaskedPixels, masks: resolved, warnings };

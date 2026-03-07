@@ -19,7 +19,11 @@
       "Bash(ls:*)",
       "Bash(FIGMA_TOKEN=test pnpm reviewer:figma:*)",
       "Bash(pnpm add:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(pnpm exec:*)",
+      "Bash(xargs grep:*)",
+      "Bash(python3:*)",
+      "Bash(pnpm:*)"
     ]
   }
 }

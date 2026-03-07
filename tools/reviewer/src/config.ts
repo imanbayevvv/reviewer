@@ -1,10 +1,13 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Project root (three levels up from tools/reviewer/src/) */
 export const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
+
+dotenv.config({ path: path.join(PROJECT_ROOT, '.env') });
 
 /** Registry YAML files */
 export const REGISTRY_DIR = path.join(PROJECT_ROOT, 'registry');
@@ -27,8 +30,8 @@ export function getEnv() {
     figmaToken: process.env.FIGMA_TOKEN || '',
     apiUrl: process.env.REVIEWER_API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000',
     appUrl: process.env.REVIEWER_APP_URL || 'http://localhost:3000',
-    seedUserEmail: process.env.REVIEWER_SEED_USER_EMAIL || 'reviewer@resale.test',
-    seedUserPassword: process.env.REVIEWER_SEED_USER_PASSWORD || 'Reviewer123!',
+    seedUserEmail: process.env.REVIEWER_SEED_USER_EMAIL || 'imanbaev01@gmail.com',
+    seedUserPassword: process.env.REVIEWER_SEED_USER_PASSWORD || '12345678',
     seedEmptyUserEmail: process.env.REVIEWER_SEED_EMPTY_USER_EMAIL || 'reviewer-empty@resale.test',
     seedEmptyUserPassword: process.env.REVIEWER_SEED_EMPTY_USER_PASSWORD || 'Reviewer123!',
   };

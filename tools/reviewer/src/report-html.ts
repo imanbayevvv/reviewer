@@ -97,6 +97,22 @@ export function generateReport(manifest: DiffManifest): string {
   const total = manifest.total_screens;
   const passRate = total > 0 ? ((summary.passed / total) * 100).toFixed(1) : '0';
 
+  // Coverage breakdown
+  const cov = manifest.coverage;
+  const coverageHtml = cov ? `
+  <div style="margin-bottom:24px;padding:16px;background:#fff;border:1px solid #e5e7eb;border-radius:8px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:8px">Registry Coverage</div>
+    <div style="display:flex;gap:24px;font-size:13px">
+      <div><span style="font-weight:600">${cov.total}</span> total in registry</div>
+      <div style="color:#16a34a"><span style="font-weight:600">${cov.ready}</span> ready</div>
+      <div style="color:#ca8a04"><span style="font-weight:600">${cov.unconfigured}</span> unconfigured</div>
+      <div style="color:#6b7280"><span style="font-weight:600">${cov.disabled}</span> disabled</div>
+      <div><span style="font-weight:600">${manifest.total_screens}</span> processed this run</div>
+    </div>
+    ${cov.unconfigured_ids.length > 0 ? `<div style="margin-top:8px;font-size:11px;color:#92400e">Unconfigured: ${cov.unconfigured_ids.map(id => `<code>${escHtml(id)}</code>`).join(', ')}</div>` : ''}
+    ${cov.disabled_ids.length > 0 ? `<div style="margin-top:4px;font-size:11px;color:#6b7280">Disabled: ${cov.disabled_ids.map(id => `<code>${escHtml(id)}</code>`).join(', ')}</div>` : ''}
+  </div>` : '';
+
   // Sort: fail first, then error, then pass, then skipped
   const sortOrder: Record<string, number> = { fail: 0, error: 1, pass: 2, skipped: 3 };
   const sorted = [...manifest.screens].sort(
@@ -169,6 +185,8 @@ export function generateReport(manifest: DiffManifest): string {
       <div style="font-size:12px;color:#6b7280">Pass Rate</div>
     </div>
   </div>
+
+  ${coverageHtml}
 
   <div style="display:flex;gap:24px">
     <!-- TOC sidebar -->

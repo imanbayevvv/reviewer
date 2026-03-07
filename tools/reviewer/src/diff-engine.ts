@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { FIGMA_STORAGE, RUNTIME_STORAGE, RUNS_STORAGE } from './config.js';
-import type { Screen } from './registry.js';
+import type { Screen, RegistryCoverage } from './registry.js';
 import { readPng, writePng, compareImages, createOverlay, resizeNearest, type ImageData } from './image-ops.js';
 import { resolveMasks, type MaskBox, type ResolvedMask } from './masking.js';
 import { computeMetrics, evaluateThresholds, type DiffStatus, type ScoringResult } from './scoring.js';
@@ -55,6 +55,7 @@ export interface DiffManifest {
   git_commit: string;
   git_branch: string;
   total_screens: number;
+  coverage?: RegistryCoverage;
   summary: {
     passed: number;
     failed: number;
@@ -83,7 +84,7 @@ function diffOutputDir(runId: string, screenId: string): string {
   return path.join(RUNS_STORAGE, runId, 'diff', screenId);
 }
 
-function loadRuntimeMaskBoxes(screenId: string): Record<string, MaskBox> | undefined {
+function loadRuntimeMaskBoxes(screenId: string): Record<string, MaskBox | MaskBox[]> | undefined {
   const metaPath = runtimeMetadataPath(screenId);
   if (!fs.existsSync(metaPath)) return undefined;
   try {
@@ -259,6 +260,7 @@ export function buildDiffManifest(
   results: ScreenDiffResult[],
   gitCommit: string,
   gitBranch: string,
+  coverage?: RegistryCoverage,
 ): DiffManifest {
   const passed = results.filter((r) => r.status === 'pass').length;
   const failed = results.filter((r) => r.status === 'fail').length;
@@ -283,6 +285,7 @@ export function buildDiffManifest(
     git_commit: gitCommit,
     git_branch: gitBranch,
     total_screens: results.length,
+    coverage,
     summary: { passed, failed, skipped, errored },
     worst_screens: worst,
     screens: results,

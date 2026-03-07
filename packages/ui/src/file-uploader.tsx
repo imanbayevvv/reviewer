@@ -22,7 +22,7 @@ export function FileUploader({ label, accept = 'image/*', previewUrl, onFile, on
   }, [onFile]);
 
   return (
-    <div className={clsx('flex flex-col gap-2', className)}>
+    <div data-testid="logo-uploader" className={clsx('flex flex-col gap-2', className)}>
       {label && <span className="text-body-lg text-neutral-600">{label}</span>}
       {previewUrl ? (
         <div className="relative h-20 w-20 rounded-md overflow-hidden border border-[rgba(0,0,0,0.1)]">

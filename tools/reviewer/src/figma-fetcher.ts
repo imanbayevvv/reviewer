@@ -63,6 +63,21 @@ function isCached(screenId: string): boolean {
   return fs.existsSync(path.join(dir, 'figma.png')) && fs.existsSync(path.join(dir, 'metadata.json'));
 }
 
+/** Maximum wait time for a single retry (10 seconds) */
+const MAX_RETRY_DELAY_MS = 10_000;
+
+/**
+ * Parse the Retry-After header value.
+ * Figma sends it as an integer in seconds.
+ * Returns delay in milliseconds, or null if the header is missing/invalid.
+ */
+function parseRetryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  return seconds * 1000;
+}
+
 async function fetchWithRetry(
   url: string,
   headers: Record<string, string>,
@@ -77,11 +92,16 @@ async function fetchWithRetry(
 
       // Retry on 429 (rate limit) and 5xx (server error)
       if (res.status === 429 || res.status >= 500) {
-        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
-        const retryAfter = res.headers.get('retry-after');
-        const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : delay;
-        console.log(`  Retry ${attempt + 1}/${RETRY_MAX} after ${waitMs}ms (status ${res.status})`);
-        await sleep(waitMs);
+        const fallbackDelay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+        const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+        const rawDelay = retryAfterMs ?? fallbackDelay;
+        const delayMs = Math.min(rawDelay, MAX_RETRY_DELAY_MS);
+        const source = retryAfterMs != null ? 'Retry-After header' : 'fallback backoff';
+
+        console.log(
+          `  Retry ${attempt + 1}/${RETRY_MAX} | status=${res.status} | delay=${delayMs}ms (${source})`,
+        );
+        await sleep(delayMs);
         continue;
       }
 
@@ -90,7 +110,13 @@ async function fetchWithRetry(
     } catch (err) {
       lastError = err as Error;
       if (attempt < RETRY_MAX - 1) {
-        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+        const delay = Math.min(
+          RETRY_BASE_DELAY_MS * Math.pow(2, attempt),
+          MAX_RETRY_DELAY_MS,
+        );
+        console.log(
+          `  Retry ${attempt + 1}/${RETRY_MAX} | network error | delay=${delay}ms (fallback backoff)`,
+        );
         await sleep(delay);
       }
     }

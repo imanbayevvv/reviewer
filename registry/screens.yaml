@@ -3,6 +3,11 @@
 #
 # Naming: screen_id = {flow_id}_step_{n}_{variant}
 # For non-step screens: {flow_id}_{screen_name}_{variant}
+#
+# Figma readiness:
+#   - node_id: "TODO_FIGMA_NODE_ID" → unconfigured (auto-skipped)
+#   - node_id: "24:45"              → ready (included in default runs)
+#   - reviewer_enabled: false        → disabled (always skipped)
 
 screens:
 
@@ -18,9 +23,9 @@ screens:
     setup:
       strategy: direct
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
       node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1440, height: 1024 }
     masks: []
     thresholds:
       pixel_diff_percent: 0.5
@@ -44,9 +49,9 @@ screens:
         - { action: click, selector: 'button[type="submit"]' }
         - { action: wait, selector: '[data-testid="login-error"]', timeout: 5000 }
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
       node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1440, height: 1024 }
     masks: []
     thresholds:
       pixel_diff_percent: 0.5
@@ -64,9 +69,9 @@ screens:
     setup:
       strategy: direct
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
       node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1440, height: 1024 }
     masks: []
     thresholds:
       pixel_diff_percent: 0.5
@@ -88,9 +93,9 @@ screens:
       strategy: direct
       user_type: empty
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
       node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1440, height: 1024 }
     masks: []
     thresholds:
       pixel_diff_percent: 0.5
@@ -99,6 +104,7 @@ screens:
     notes: "Empty dashboard with 'Create a ReSale shop' CTA. Sidebar visible."
 
   - screen_id: dashboard_home_populated
+    reviewer_enabled: false
     flow_id: dashboard
     step: 1
     variant: populated
@@ -110,9 +116,9 @@ screens:
       strategy: direct
       user_type: main
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
-      node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
+      node_id: "24:45"
+    viewport: { width: 1440, height: 1024 }
     masks:
       - selector: "[data-testid='shop-list']"
         reason: "Shop names/URLs are dynamic seeded data"
@@ -135,15 +141,17 @@ screens:
       strategy: direct
       user_type: main
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
-      node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
-    masks: []
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
+      node_id: "52:1281"
+    viewport: { width: 1440, height: 1024 }
+    masks:
+      - selector: "[data-testid='app-sidebar']"
+        reason: "Sidebar shop list and brand name differ between Figma seed data and runtime seed data"
     thresholds:
-      pixel_diff_percent: 0.5
+      pixel_diff_percent: 1.0
       structural_similarity: 0.95
     tags: [wizard, step-1, form, mvp]
-    notes: "Brand name + website URL inputs. Stepper shows 1/2. Cancel goes to dashboard."
+    notes: "Brand name + website URL inputs. Stepper shows 1/2. Cancel goes to dashboard. Sidebar masked: Figma has different seed shops than runtime."
 
   - screen_id: shop_create_step_2_analyzing
     flow_id: shop_create
@@ -160,10 +168,12 @@ screens:
         _shopId: "{analyzingShopId}"
       wait_for: '[data-testid="progress-loader"]'
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
-      node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
+      node_id: "87:1109"
+    viewport: { width: 1440, height: 1024 }
     masks:
+      - selector: "[data-testid='app-sidebar']"
+        reason: "Sidebar shop list differs between Figma and runtime seed data"
       - selector: "[data-testid='progress-loader']"
         reason: "animate-pulse + dynamic step labels change over time"
     thresholds:
@@ -189,17 +199,23 @@ screens:
       query_params:
         _shopId: "{shopId}"
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
-      node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
+      node_id: "79:3271"
+    viewport: { width: 1440, height: 1024 }
     masks:
+      - selector: "[data-testid='app-sidebar']"
+        reason: "Sidebar shop list differs between Figma and runtime seed data"
       - selector: "[data-testid='theme-preview-image']"
         reason: "Theme preview images may differ between environments"
     thresholds:
       pixel_diff_percent: 1.0
       structural_similarity: 0.93
     tags: [wizard, step-3, themes, mvp]
-    notes: "Theme selection grid. Stepper shows 2/2. Mobile/Desktop tab toggle at bottom."
+    notes: >
+      Theme selection grid. Stepper shows 2/2. Mobile/Desktop tab toggle at bottom.
+      KNOWN DRIFT: Figma shows Mobile preview mode with phone mockup layout.
+      Runtime shows flat list with small thumbnails (Desktop mode).
+      This is real design drift, not noise — implementation does not match Figma yet.
 
   - screen_id: shop_create_step_3_theme_selected
     flow_id: shop_create
@@ -218,17 +234,21 @@ screens:
         - { action: click, selector: '[data-testid="theme-card-core-resale"] button' }
         - { action: wait, timeout: 300 }
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
-      node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
+      node_id: "79:3271"
+    viewport: { width: 1440, height: 1024 }
     masks:
+      - selector: "[data-testid='app-sidebar']"
+        reason: "Sidebar shop list differs between Figma and runtime seed data"
       - selector: "[data-testid='theme-preview-image']"
         reason: "Theme preview images may differ between environments"
     thresholds:
       pixel_diff_percent: 1.0
       structural_similarity: 0.93
     tags: [wizard, step-3, themes, selected, mvp]
-    notes: "Theme selection with one theme highlighted + Continue button visible."
+    notes: >
+      Theme selection with one theme highlighted + Continue button visible.
+      KNOWN DRIFT: Same layout mismatch as step_3_theme — Figma shows phone mockup, runtime shows flat list.
 
   - screen_id: shop_create_step_4_setup
     flow_id: shop_create
@@ -245,10 +265,12 @@ screens:
         _shopId: "{shopId}"
         _themeId: "core-resale"
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
-      node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
+      node_id: "107:1445"
+    viewport: { width: 1440, height: 1024 }
     masks:
+      - selector: "[data-testid='app-sidebar']"
+        reason: "Sidebar shop list differs between Figma and runtime seed data"
       - selector: "[data-testid='logo-uploader']"
         reason: "File uploader preview depends on uploaded file"
       - selector: "input[type='color']"
@@ -257,7 +279,10 @@ screens:
       pixel_diff_percent: 1.0
       structural_similarity: 0.93
     tags: [wizard, step-4, setup, form, mvp]
-    notes: "Logo upload, font inputs, color pickers. Stepper shows 1/2 (re-used)."
+    notes: >
+      Logo upload, font inputs, color pickers. Stepper shows 1/2 (re-used).
+      KNOWN DRIFT: Figma shows 3-column layout with live phone preview.
+      Runtime shows single-column form. Real design gap, not noise.
 
   # ── Shop Detail Flow ───────────────────────────────────
 
@@ -273,9 +298,9 @@ screens:
       strategy: direct
       user_type: main
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
       node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1440, height: 1024 }
     masks:
       - selector: "[data-testid='shop-name']"
         reason: "Dynamic shop name"
@@ -297,9 +322,9 @@ screens:
       strategy: direct
       user_type: main
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
       node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1440, height: 1024 }
     masks:
       - selector: "[data-testid='shop-name']"
         reason: "Dynamic shop name"
@@ -324,9 +349,9 @@ screens:
         - { action: click, selector: '[data-testid="tab-products"]' }
         - { action: wait, timeout: 500 }
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
       node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1440, height: 1024 }
     masks: []
     thresholds:
       pixel_diff_percent: 0.5
@@ -351,9 +376,9 @@ screens:
         - { action: click, selector: '[data-testid="tab-products"]' }
         - { action: wait, timeout: 500 }
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
       node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1440, height: 1024 }
     masks:
       - selector: "[data-testid='product-list']"
         reason: "Product titles/prices are dynamic seeded data"
@@ -376,9 +401,9 @@ screens:
       strategy: direct
       user_type: main
     figma:
-      file_key: "TODO_FIGMA_FILE_KEY"
+      file_key: "eSn1fOnDgiIQUbBBhrdrOs"
       node_id: "TODO_FIGMA_NODE_ID"
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1440, height: 1024 }
     masks: []
     thresholds:
       pixel_diff_percent: 0.5

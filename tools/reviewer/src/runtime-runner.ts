@@ -57,8 +57,8 @@ export interface RuntimeMetadata {
   runtime_status: RuntimeCaptureStatus;
   checksum: string;
   notes: string;
-  /** Bounding boxes for mask selectors, keyed by CSS selector */
-  mask_boxes?: Record<string, MaskBoundingBox>;
+  /** Bounding boxes for mask selectors, keyed by CSS selector (array: one per matched element) */
+  mask_boxes?: Record<string, MaskBoundingBox | MaskBoundingBox[]>;
 }
 
 // ── Helpers ──────────────────────────────────────────────
@@ -239,8 +239,9 @@ async function captureScreen(
     }
   }
 
-  // Small stabilization delay for final paint
-  await page.waitForTimeout(200);
+  // Stabilization: move mouse to corner to avoid hover effects, wait for final paint
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(300);
 
   // Take screenshot
   const dir = screenDir(screen.screen_id);
@@ -269,20 +270,30 @@ async function captureScreen(
   const checksum = computeFileHash(pngPath);
   const capturedAt = isoNow();
 
-  // Capture mask bounding boxes from CSS selectors
-  let maskBoxes: Record<string, MaskBoundingBox> | undefined;
+  // Capture mask bounding boxes from CSS selectors (ALL matching elements)
+  let maskBoxes: Record<string, MaskBoundingBox[]> | undefined;
   if (screen.masks.length > 0) {
     maskBoxes = {};
     for (const mask of screen.masks) {
       try {
-        const box = await page.locator(mask.selector).first().boundingBox();
-        if (box) {
-          maskBoxes[mask.selector] = {
-            x: Math.round(box.x),
-            y: Math.round(box.y),
-            w: Math.round(box.width),
-            h: Math.round(box.height),
-          };
+        const locator = page.locator(mask.selector);
+        const count = await locator.count();
+        if (count > 0) {
+          const boxes: MaskBoundingBox[] = [];
+          for (let i = 0; i < count; i++) {
+            const box = await locator.nth(i).boundingBox();
+            if (box) {
+              boxes.push({
+                x: Math.round(box.x),
+                y: Math.round(box.y),
+                w: Math.round(box.width),
+                h: Math.round(box.height),
+              });
+            }
+          }
+          if (boxes.length > 0) {
+            maskBoxes[mask.selector] = boxes;
+          }
         }
       } catch {
         // Selector not found — mask will be unresolved at diff time

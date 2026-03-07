@@ -8,6 +8,7 @@ interface SidebarProps {
 export function Sidebar({ children, className }: SidebarProps) {
   return (
     <aside
+      data-testid="app-sidebar"
       className={clsx(
         'flex h-screen w-sidebar flex-col gap-4 px-2 py-6 flex-shrink-0',
         className,

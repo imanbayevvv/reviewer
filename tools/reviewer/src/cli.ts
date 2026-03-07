@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Command } from 'commander';
-import { loadScreens, filterScreens } from './registry.js';
+import { loadScreens, filterScreens, isScreenReady, getScreenReadiness, getRegistryCoverage, type RegistryCoverage } from './registry.js';
 import { fetchAllFigmaScreens, type FigmaFetchResult } from './figma-fetcher.js';
 import { captureAllScreens, type RuntimeCaptureResult } from './runtime-runner.js';
 import { buildManifest, saveManifest } from './manifest.js';
@@ -17,6 +17,7 @@ interface FilterOpts {
   flow?: string;
   tag?: string;
   force?: boolean;
+  all?: boolean;
 }
 
 function addFilterOptions(cmd: Command): Command {
@@ -24,17 +25,36 @@ function addFilterOptions(cmd: Command): Command {
     .option('--screen <screen_id>', 'Run only a specific screen')
     .option('--flow <flow_id>', 'Run only screens in a specific flow')
     .option('--tag <tag>', 'Run only screens with a specific tag')
-    .option('--force', 'Force refresh (skip cache)', false);
+    .option('--force', 'Force refresh (skip cache)', false)
+    .option('--all', 'Include unconfigured/disabled screens (default: ready-only)', false);
 }
 
-function getFilteredScreens(opts: FilterOpts) {
+function getFilteredScreens(opts: FilterOpts): { screens: ReturnType<typeof loadScreens>; coverage: RegistryCoverage } {
   const all = loadScreens();
   const filtered = filterScreens(all, {
     screenId: opts.screen,
     flowId: opts.flow,
     tag: opts.tag,
   });
-  return filtered;
+  const coverage = getRegistryCoverage(filtered);
+
+  // Default: ready-only. --all includes everything.
+  // Exception: --screen targets a specific screen, always include it.
+  const screens = (opts.all || opts.screen)
+    ? filtered
+    : filtered.filter(isScreenReady);
+
+  return { screens, coverage };
+}
+
+function printCoverage(coverage: RegistryCoverage, processedCount: number) {
+  console.log(`[registry] ${coverage.ready} ready / ${coverage.unconfigured} unconfigured / ${coverage.disabled} disabled (${coverage.total} total)`);
+  if (processedCount < coverage.total) {
+    console.log(`[registry] Processing ${processedCount} ready screens`);
+  }
+  if (coverage.unconfigured > 0 && processedCount === coverage.ready) {
+    console.log(`[registry] Unconfigured: ${coverage.unconfigured_ids.join(', ')}`);
+  }
 }
 
 function printCaptureSummary(
@@ -94,7 +114,9 @@ const program = new Command()
 const figmaCmd = new Command('figma')
   .description('Fetch Figma baseline screenshots')
   .action(async (opts: FilterOpts) => {
-    const screens = getFilteredScreens(opts);
+    const { screens, coverage } = getFilteredScreens(opts);
+    console.log('');
+    printCoverage(coverage, screens.length);
     console.log(`\nFigma fetch: ${screens.length} targets\n`);
 
     const runId = generateRunId();
@@ -122,7 +144,9 @@ program.addCommand(figmaCmd);
 const runtimeCmd = new Command('runtime')
   .description('Capture runtime screenshots via Playwright')
   .action(async (opts: FilterOpts) => {
-    const screens = getFilteredScreens(opts);
+    const { screens, coverage } = getFilteredScreens(opts);
+    console.log('');
+    printCoverage(coverage, screens.length);
     console.log(`\nRuntime capture: ${screens.length} targets\n`);
 
     const runId = generateRunId();
@@ -150,7 +174,9 @@ program.addCommand(runtimeCmd);
 const diffCmd = new Command('diff')
   .description('Run visual diff on existing figma/runtime artifacts')
   .action(async (opts: FilterOpts) => {
-    const screens = getFilteredScreens(opts);
+    const { screens, coverage } = getFilteredScreens(opts);
+    console.log('');
+    printCoverage(coverage, screens.length);
     console.log(`\nDiff: ${screens.length} targets\n`);
 
     const runId = generateRunId();
@@ -165,6 +191,7 @@ const diffCmd = new Command('diff')
       diffResults,
       getGitCommit(),
       getGitBranch(),
+      coverage,
     );
     const manifestPath = saveDiffManifest(diffManifest);
 
@@ -199,7 +226,9 @@ program.addCommand(reportCmd);
 const runCmd = new Command('run')
   .description('Run capture pipeline: Figma fetch + runtime capture')
   .action(async (opts: FilterOpts) => {
-    const screens = getFilteredScreens(opts);
+    const { screens, coverage } = getFilteredScreens(opts);
+    console.log('');
+    printCoverage(coverage, screens.length);
     console.log(`\nCapture run: ${screens.length} targets\n`);
 
     const runId = generateRunId();
@@ -232,7 +261,9 @@ program.addCommand(runCmd);
 const fullCmd = new Command('full')
   .description('Full pipeline: Figma fetch + runtime capture + diff + HTML report')
   .action(async (opts: FilterOpts) => {
-    const screens = getFilteredScreens(opts);
+    const { screens, coverage } = getFilteredScreens(opts);
+    console.log('');
+    printCoverage(coverage, screens.length);
     console.log(`\nFull pipeline: ${screens.length} targets\n`);
 
     const runId = generateRunId();
@@ -266,6 +297,7 @@ const fullCmd = new Command('full')
       diffResults,
       getGitCommit(),
       getGitBranch(),
+      coverage,
     );
     const diffManifestPath = saveDiffManifest(diffManifest);
 
@@ -281,20 +313,29 @@ const fullCmd = new Command('full')
 addFilterOptions(fullCmd);
 program.addCommand(fullCmd);
 
-// reviewer list — utility to show registry contents
+// reviewer list — utility to show registry contents (always shows all)
 program
   .command('list')
   .description('List screens from registry')
   .option('--flow <flow_id>', 'Filter by flow')
   .option('--tag <tag>', 'Filter by tag')
   .action((opts: { flow?: string; tag?: string }) => {
-    const screens = getFilteredScreens(opts as FilterOpts);
-    console.log(`\n${screens.length} screens:\n`);
-    for (const s of screens) {
-      const figmaStatus =
-        s.figma.file_key === 'TODO_FIGMA_FILE_KEY' ? 'no-figma-ref' : 'has-figma-ref';
+    const allScreens = loadScreens();
+    const filtered = filterScreens(allScreens, {
+      screenId: undefined,
+      flowId: opts.flow,
+      tag: opts.tag,
+    });
+    const coverage = getRegistryCoverage(filtered);
+    console.log('');
+    printCoverage(coverage, coverage.ready);
+    console.log(`\n${filtered.length} screens:\n`);
+    for (const s of filtered) {
+      const readiness = getScreenReadiness(s);
+      const badge = readiness === 'ready' ? 'READY' : readiness === 'disabled' ? 'DISABLED' : 'UNCONF';
+      const color = readiness === 'ready' ? '' : '  ';
       console.log(
-        `  ${s.screen_id.padEnd(40)} flow=${s.flow_id.padEnd(14)} [${figmaStatus}] ${s.tags.join(', ')}`,
+        `  ${color}[${badge.padEnd(8)}] ${s.screen_id.padEnd(40)} flow=${s.flow_id.padEnd(14)} ${s.tags.join(', ')}`,
       );
     }
   });

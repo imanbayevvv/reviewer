@@ -15,7 +15,7 @@ export function ThemeCard({ name, previewUrl, selected, onSelect }: ThemeCardPro
       <div className="flex-1">
         <h3 className="text-body-lg font-semibold">{name}</h3>
       </div>
-      <div className="h-[80px] w-[120px] rounded-md bg-neutral-300 overflow-hidden flex-shrink-0">
+      <div data-testid="theme-preview-image" className="h-[80px] w-[120px] rounded-md bg-neutral-300 overflow-hidden flex-shrink-0">
         {previewUrl && (
           <img src={previewUrl} alt={name} className="h-full w-full object-cover" />
         )}
