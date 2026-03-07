@@ -9,6 +9,7 @@ import { diffAllScreens, buildDiffManifest, saveDiffManifest } from './diff-engi
 import { generateReport, saveReport } from './report-html.js';
 import { generateRunId, isoNow, getGitCommit, getGitBranch } from './utils.js';
 import { RUNS_STORAGE } from './config.js';
+import { findLatestManifest, loadManifest, detectRegressions, saveRegressionReport } from './regression.js';
 
 // ── Shared options ───────────────────────────────────────
 
@@ -18,6 +19,7 @@ interface FilterOpts {
   tag?: string;
   force?: boolean;
   all?: boolean;
+  failOnRegression?: boolean;
 }
 
 function addFilterOptions(cmd: Command): Command {
@@ -309,9 +311,82 @@ const fullCmd = new Command('full')
     console.log(`\nCapture manifest: ${captureManifestPath}`);
     console.log(`Diff manifest:    ${diffManifestPath}`);
     console.log(`HTML report:      ${reportPath}`);
+
+    // ── Phase 5: Regression Detection ──
+    const baseline = findLatestManifest(runId);
+    if (baseline) {
+      console.log('\n--- Phase 5: Regression Detection ---');
+      console.log(`[regress] Baseline: ${baseline.run_id} (${baseline.git_commit})`);
+      const regressionReport = detectRegressions(baseline, diffManifest);
+      const regressionPath = saveRegressionReport(regressionReport, runId);
+      console.log(regressionReport.summary_table);
+      console.log(`Regression report: ${regressionPath}`);
+
+      if (opts.failOnRegression && regressionReport.has_unexpected_regressions) {
+        console.error(`\n!! ${regressionReport.unexpected_regressions.length} unexpected regression(s) — failing`);
+        process.exit(1);
+      }
+    } else {
+      console.log('\n[regress] No previous baseline — skipping regression detection (first run)');
+    }
   });
 addFilterOptions(fullCmd);
+fullCmd.option('--fail-on-regression', 'Exit with code 1 if unexpected regressions found', false);
 program.addCommand(fullCmd);
+
+// reviewer regress — compare a run against its baseline for regressions
+const regressCmd = new Command('regress')
+  .description('Detect regressions by comparing current run against previous baseline')
+  .option('--run <run_id>', 'Current run ID to check (default: latest)')
+  .option('--baseline <run_id>', 'Baseline run ID to compare against (default: second-latest)')
+  .option('--fail-on-regression', 'Exit with code 1 if unexpected regressions found', false)
+  .action((opts: { run?: string; baseline?: string; failOnRegression?: boolean }) => {
+    // Resolve current manifest
+    let current: ReturnType<typeof loadManifest>;
+    if (opts.run) {
+      current = loadManifest(opts.run);
+      if (!current) {
+        console.error(`Diff manifest not found for run: ${opts.run}`);
+        process.exit(1);
+      }
+    } else {
+      current = findLatestManifest();
+      if (!current) {
+        console.error('No diff manifests found in storage/runs/');
+        process.exit(1);
+      }
+    }
+
+    // Resolve baseline manifest
+    let baseline: ReturnType<typeof loadManifest>;
+    if (opts.baseline) {
+      baseline = loadManifest(opts.baseline);
+      if (!baseline) {
+        console.error(`Baseline diff manifest not found for run: ${opts.baseline}`);
+        process.exit(1);
+      }
+    } else {
+      baseline = findLatestManifest(current!.run_id);
+      if (!baseline) {
+        console.log('[regress] No previous baseline found — this is the first run. No regressions to detect.');
+        process.exit(0);
+      }
+    }
+
+    console.log(`\n[regress] Comparing: ${current!.run_id} (current) vs ${baseline!.run_id} (baseline)\n`);
+
+    const report = detectRegressions(baseline!, current!);
+    const reportPath = saveRegressionReport(report, current!.run_id);
+
+    console.log(report.summary_table);
+    console.log(`\nRegression report: ${reportPath}`);
+
+    if (opts.failOnRegression && report.has_unexpected_regressions) {
+      console.error(`\n!! ${report.unexpected_regressions.length} unexpected regression(s) detected — failing CI`);
+      process.exit(1);
+    }
+  });
+program.addCommand(regressCmd);
 
 // reviewer list — utility to show registry contents (always shows all)
 program

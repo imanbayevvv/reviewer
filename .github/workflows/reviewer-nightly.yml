@@ -1,0 +1,187 @@
+name: Reviewer Nightly
+
+on:
+  schedule:
+    # Run at 03:00 UTC every night
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force re-fetch all artifacts (skip cache)'
+        required: false
+        default: 'false'
+        type: boolean
+
+concurrency:
+  group: reviewer-nightly
+  cancel-in-progress: true
+
+env:
+  FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
+  DATABASE_URL: postgresql://resale:resale_dev@localhost:5432/resale
+  REDIS_URL: redis://localhost:6379
+  REVIEWER_APP_URL: http://localhost:3000
+  REVIEWER_API_URL: http://localhost:4000
+  REVIEWER_SEED_USER_EMAIL: imanbaev01@gmail.com
+  REVIEWER_SEED_USER_PASSWORD: '12345678'
+
+jobs:
+  reviewer:
+    name: Visual Diff Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: resale
+          POSTGRES_USER: resale
+          POSTGRES_PASSWORD: resale_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm -C tools/reviewer exec playwright install --with-deps chromium
+
+      # Restore previous run artifacts for baseline comparison
+      - name: Restore baseline artifacts
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            storage/figma
+            storage/runtime
+            storage/runs
+          key: reviewer-artifacts-${{ github.ref_name }}
+          restore-keys: |
+            reviewer-artifacts-
+
+      - name: Run database migrations
+        run: pnpm -C apps/api exec prisma migrate deploy
+
+      - name: Seed database
+        run: pnpm -C apps/api exec prisma db seed
+
+      - name: Start API server
+        run: |
+          pnpm -C apps/api dev &
+          # Wait for API to be ready
+          for i in $(seq 1 30); do
+            curl -s http://localhost:4000/health > /dev/null && break
+            sleep 2
+          done
+
+      - name: Start web server
+        run: |
+          pnpm -C apps/web dev &
+          # Wait for web to be ready
+          for i in $(seq 1 30); do
+            curl -s http://localhost:3000 > /dev/null && break
+            sleep 2
+          done
+
+      - name: Run full reviewer pipeline
+        id: reviewer
+        run: |
+          FORCE_FLAG=""
+          if [ "${{ inputs.force }}" = "true" ]; then
+            FORCE_FLAG="--force"
+          fi
+          pnpm -C tools/reviewer cli full $FORCE_FLAG 2>&1 | tee reviewer-output.txt
+
+          # Extract run ID from output
+          RUN_ID=$(grep -oP 'Diff manifest:\s+.*runs/\K[^/]+' reviewer-output.txt || echo "unknown")
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Run regression detection
+        id: regress
+        run: |
+          pnpm -C tools/reviewer cli regress --fail-on-regression 2>&1 | tee regression-output.txt
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      # Save artifacts for next run's baseline
+      - name: Save artifacts cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            storage/figma
+            storage/runtime
+            storage/runs
+          key: reviewer-artifacts-${{ github.ref_name }}-${{ github.run_number }}
+
+      - name: Upload report artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reviewer-report-${{ steps.reviewer.outputs.run_id }}
+          path: |
+            storage/runs/${{ steps.reviewer.outputs.run_id }}/report.html
+            storage/runs/${{ steps.reviewer.outputs.run_id }}/diff-manifest.json
+            storage/runs/${{ steps.reviewer.outputs.run_id }}/regression-report.json
+          retention-days: 30
+
+      - name: Post summary
+        if: always()
+        run: |
+          echo "## Reviewer Nightly Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Run ID:** \`${{ steps.reviewer.outputs.run_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Commit:** \`$(git rev-parse --short HEAD)\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Extract summary from diff output
+          if [ -f reviewer-output.txt ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            sed -n '/DIFF SUMMARY/,/======/p' reviewer-output.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Add regression info
+          if [ -f regression-output.txt ]; then
+            echo "### Regression Detection" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            sed -n '/REGRESSION REPORT/,/======/p' regression-output.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Fail on unexpected regressions
+        if: steps.regress.outcome == 'failure'
+        run: |
+          echo "::error::Unexpected visual regressions detected! Check the regression report."
+          exit 1
