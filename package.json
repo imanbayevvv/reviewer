@@ -14,7 +14,8 @@
     "reviewer:diff": "pnpm -C tools/reviewer cli diff",
     "reviewer:regress": "pnpm -C tools/reviewer cli regress",
     "reviewer:embed-figma": "pnpm -C tools/reviewer embed-figma",
-    "reviewer:embed-runtime": "pnpm -C tools/reviewer cli embed-runtime"
+    "reviewer:embed-runtime": "pnpm -C tools/reviewer cli embed-runtime",
+    "reviewer:evaluate-mapping": "pnpm -C tools/reviewer cli evaluate-mapping"
   },
   "devDependencies": {
     "turbo": "^2.3.0"

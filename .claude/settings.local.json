@@ -26,7 +26,8 @@
       "Bash(pnpm:*)",
       "Bash(source .env:*)",
       "Bash(npx:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(mkdir:*)"
     ]
   }
 }

@@ -106,7 +106,13 @@ interface FigmaCandidate {
   width: number;
   height: number;
   score: number;
-  rank: 'recommended' | 'similar' | 'other' | 'visual';
+  final_score: number;
+  raw_visual_score: number | null;
+  lexical_score: number;
+  context_score: number;
+  match_confidence: 'high' | 'medium' | 'low';
+  match_reasons: string[];
+  rank: 'recommended' | 'similar' | 'other';
   already_mapped: boolean;
   visual_score?: number;
 }
@@ -1350,8 +1356,7 @@ function MappingAssistant({
     }
   };
 
-  const visual = candidates.filter(c => c.rank === 'visual' || (c.visual_score != null && c.visual_score >= 0.7));
-  const recommended = candidates.filter(c => c.rank === 'recommended' && !(c.visual_score != null && c.visual_score >= 0.7));
+  const recommended = candidates.filter(c => c.rank === 'recommended');
   const similar = candidates.filter(c => c.rank === 'similar');
   const other = candidates.filter(c => c.rank === 'other');
 
@@ -1481,16 +1486,6 @@ function MappingAssistant({
         </div>
       ) : (
         <>
-          {visual.length > 0 && (
-            <CandidateGroup
-              title="Visual Matches"
-              color="#7c3aed"
-              candidates={visual}
-              onSelect={handleSave}
-              saving={saving}
-              showVisualScore
-            />
-          )}
           {recommended.length > 0 && (
             <CandidateGroup
               title="Recommended"
@@ -1537,7 +1532,6 @@ function CandidateGroup({
   onSelect,
   saving,
   defaultCollapsed = false,
-  showVisualScore = false,
 }: {
   title: string;
   color: string;
@@ -1545,7 +1539,6 @@ function CandidateGroup({
   onSelect: (nodeId: string) => void;
   saving: boolean;
   defaultCollapsed?: boolean;
-  showVisualScore?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
@@ -1565,7 +1558,7 @@ function CandidateGroup({
       {!collapsed && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
           {candidates.map(c => (
-            <CandidateRow key={c.node_id} candidate={c} onSelect={onSelect} saving={saving} showVisualScore={showVisualScore} />
+            <CandidateRow key={c.node_id} candidate={c} onSelect={onSelect} saving={saving} />
           ))}
         </div>
       )}
@@ -1573,31 +1566,44 @@ function CandidateGroup({
   );
 }
 
+const REASON_COLORS: Record<string, string> = {
+  visual: '#7c3aed',
+  lexical: '#2563eb',
+  context: '#059669',
+  hybrid: '#d97706',
+};
+
+const CONFIDENCE_COLORS: Record<string, { bg: string; fg: string; border: string }> = {
+  high: { bg: '#f0fdf4', fg: '#166534', border: '#bbf7d0' },
+  medium: { bg: '#fffbeb', fg: '#92400e', border: '#fde68a' },
+  low: { bg: '#fff', fg: '#9ca3af', border: '#e5e7eb' },
+};
+
 function CandidateRow({
   candidate,
   onSelect,
   saving,
-  showVisualScore = false,
 }: {
   candidate: FigmaCandidate;
   onSelect: (nodeId: string) => void;
   saving: boolean;
-  showVisualScore?: boolean;
 }) {
   const c = candidate;
+  const conf = CONFIDENCE_COLORS[c.match_confidence] || CONFIDENCE_COLORS.low;
+
   return (
     <div
       style={{
         display: 'flex', alignItems: 'center', gap: 10,
         padding: '8px 12px', borderRadius: 6,
-        border: `1px solid ${showVisualScore && c.visual_score != null && c.visual_score >= 0.7 ? '#c4b5fd' : '#e5e7eb'}`,
-        background: c.already_mapped ? '#fafafa' : showVisualScore ? '#faf5ff' : '#fff',
+        border: `1px solid ${c.already_mapped ? '#e5e7eb' : conf.border}`,
+        background: c.already_mapped ? '#fafafa' : conf.bg,
         fontSize: 12,
         opacity: c.already_mapped ? 0.6 : 1,
       }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 600 }}>{c.name}</span>
           {c.already_mapped && (
             <span style={{
@@ -1607,6 +1613,17 @@ function CandidateRow({
               MAPPED
             </span>
           )}
+          {/* Reason tags */}
+          {c.match_reasons && c.match_reasons.filter(r => r !== 'hybrid').map(r => (
+            <span key={r} style={{
+              fontSize: 9, padding: '1px 5px', borderRadius: 3,
+              background: `${REASON_COLORS[r] || '#6b7280'}18`,
+              color: REASON_COLORS[r] || '#6b7280',
+              fontWeight: 600,
+            }}>
+              {r}
+            </span>
+          ))}
         </div>
         <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>
           <code>{c.node_id}</code>
@@ -1614,30 +1631,28 @@ function CandidateRow({
           {c.section_name && <>{' '}&middot;{' '}{c.section_name}</>}
           {c.page_name && <>{' '}&middot;{' '}{c.page_name}</>}
         </div>
+        {/* Score breakdown */}
+        <div style={{ fontSize: 10, color: '#a1a1aa', marginTop: 2, display: 'flex', gap: 8, fontFamily: 'monospace' }}>
+          <span>final:{(c.final_score * 100).toFixed(0)}</span>
+          {c.raw_visual_score != null && <span style={{ color: '#7c3aed' }}>vis:{(c.raw_visual_score * 100).toFixed(0)}</span>}
+          <span style={{ color: '#2563eb' }}>lex:{(c.lexical_score * 100).toFixed(0)}</span>
+          <span style={{ color: '#059669' }}>ctx:{(c.context_score * 100).toFixed(0)}</span>
+        </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {showVisualScore && c.visual_score != null ? (
-          <span style={{
-            fontSize: 10, fontFamily: 'monospace',
-            color: c.visual_score >= 0.8 ? '#7c3aed' : c.visual_score >= 0.7 ? '#a78bfa' : '#9ca3af',
-            fontWeight: c.visual_score >= 0.8 ? 700 : 400,
-          }}>
-            {(c.visual_score * 100).toFixed(0)}% sim
-          </span>
-        ) : (
-          <span style={{
-            fontSize: 10, color: '#9ca3af', fontFamily: 'monospace',
-          }}>
-            {c.score.toFixed(0)}pt
-          </span>
-        )}
+        <span style={{
+          fontSize: 10, fontFamily: 'monospace', fontWeight: 600,
+          color: c.match_confidence === 'high' ? '#166534' : c.match_confidence === 'medium' ? '#92400e' : '#9ca3af',
+        }}>
+          {(c.final_score * 100).toFixed(0)}%
+        </span>
         <button
           onClick={() => onSelect(c.node_id)}
           disabled={saving}
           style={{
             padding: '3px 10px', fontSize: 11, fontWeight: 600,
             border: 'none', borderRadius: 4,
-            background: c.already_mapped ? '#e5e7eb' : showVisualScore ? '#7c3aed' : '#2563eb',
+            background: c.already_mapped ? '#e5e7eb' : c.match_confidence === 'high' ? '#16a34a' : '#2563eb',
             color: c.already_mapped ? '#6b7280' : '#fff',
             cursor: saving ? 'default' : 'pointer',
             opacity: saving ? 0.5 : 1,

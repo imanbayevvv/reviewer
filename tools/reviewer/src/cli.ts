@@ -12,6 +12,7 @@ import { RUNS_STORAGE, STORAGE_DIR } from './config.js';
 import { findLatestManifest, loadManifest, detectRegressions, saveRegressionReport } from './regression.js';
 import { runPRCommentCLI } from './pr-comment.js';
 import { embedAllFigmaFrames, embedRuntimeScreen, EMBEDDINGS_DIR } from './visual-embedding.js';
+import { runEvaluation } from './evaluate-mapping.js';
 
 // ── Shared options ───────────────────────────────────────
 
@@ -465,6 +466,20 @@ program
     console.log(`Stored: ${EMBEDDINGS_DIR}/runtime/`);
   });
 addFilterOptions(program.commands[program.commands.length - 1] as Command);
+
+// reviewer evaluate-mapping — measure ranking quality against labeled data
+program
+  .command('evaluate-mapping')
+  .description('Evaluate hybrid ranking quality against labeled screen mappings')
+  .option('--json', 'Output JSON instead of table')
+  .action((opts: { json?: boolean }) => {
+    const report = runEvaluation();
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(report.table);
+    }
+  });
 
 // reviewer list — utility to show registry contents (always shows all)
 program

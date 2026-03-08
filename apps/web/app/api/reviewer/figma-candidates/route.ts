@@ -8,6 +8,7 @@ const FIGMA_TREE = path.join(STORAGE_DIR, 'figma_tree.json');
 const FIGMA_SECTIONS = path.join(STORAGE_DIR, 'figma_sections.json');
 const FIGMA_FRAMES = path.join(STORAGE_DIR, 'figma_frames.json');
 const EMBEDDINGS_DIR = path.join(STORAGE_DIR, 'embeddings');
+const REGISTRY_PATH = path.join(PROJECT_ROOT, 'registry', 'screens.yaml');
 
 // ── Types ────────────────────────────────────────────────
 
@@ -19,10 +20,17 @@ export interface FigmaCandidate {
   section_name: string | null;
   width: number;
   height: number;
-  score: number;
-  rank: 'recommended' | 'similar' | 'other' | 'visual';
+  final_score: number;
+  raw_visual_score: number | null;
+  lexical_score: number;
+  context_score: number;
+  match_confidence: 'high' | 'medium' | 'low';
+  match_reasons: string[];     // e.g. ['visual', 'lexical', 'context', 'hybrid']
+  rank: 'recommended' | 'similar' | 'other';
   already_mapped: boolean;
-  visual_score?: number; // cosine similarity 0..1 (only for visual matches)
+  // v0.6 compat
+  score: number;
+  visual_score?: number;
 }
 
 // ── String similarity (Dice coefficient on bigrams) ──────
@@ -89,7 +97,6 @@ function extractFramesFromTree(): RawFrame[] {
       for (const page of pages) {
         for (const child of page.children || []) {
           if (child.type === 'SECTION') {
-            // Frames inside sections
             for (const sc of child.children || []) {
               if (sc.type === 'FRAME' && !seen.has(sc.id)) {
                 seen.add(sc.id);
@@ -172,10 +179,6 @@ function extractFramesFromTree(): RawFrame[] {
   }
 
   // Source 4: local figma metadata fallback
-  // Mapped frames that were fetched via the reviewer pipeline have metadata.json
-  // in storage/figma/{screen_id}/. If their node_id isn't already in the catalog
-  // from sources 1-3, reconstruct a candidate entry so manually-mapped frames
-  // always appear in the candidate list.
   const figmaStorageDir = path.join(STORAGE_DIR, 'figma');
   if (fs.existsSync(figmaStorageDir)) {
     try {
@@ -189,7 +192,6 @@ function extractFramesFromTree(): RawFrame[] {
           const nodeId = meta.node_id || '';
           if (!nodeId || seen.has(nodeId)) continue;
           seen.add(nodeId);
-          // Use screen_id as display name since we don't have the Figma tree name
           frames.push({
             node_id: nodeId,
             name: meta.name || dir.name.replace(/_/g, ' '),
@@ -212,8 +214,7 @@ function extractFramesFromTree(): RawFrame[] {
 function getMappedNodeIds(): Set<string> {
   const mapped = new Set<string>();
   try {
-    const yaml = fs.readFileSync(path.join(PROJECT_ROOT, 'registry', 'screens.yaml'), 'utf-8');
-    // Simple regex extraction of node_id values
+    const yaml = fs.readFileSync(REGISTRY_PATH, 'utf-8');
     const re = /node_id:\s*"([^"]+)"/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(yaml)) !== null) {
@@ -221,79 +222,6 @@ function getMappedNodeIds(): Set<string> {
     }
   } catch { /* ignore */ }
   return mapped;
-}
-
-// ── Score + rank candidates ──────────────────────────────
-
-function scoreCandidates(
-  frames: RawFrame[],
-  screenId: string,
-  flowId: string,
-  viewport: { width: number; height: number } | null,
-): FigmaCandidate[] {
-  const mapped = getMappedNodeIds();
-
-  const screenKeywords = extractKeywords(screenId);
-  const flowKeywords = extractKeywords(flowId);
-
-  return frames.map(f => {
-    let score = 0;
-
-    // 1. Name similarity to screen_id (0-1, weight 40)
-    const nameSim = diceCoeff(screenId, f.name);
-    score += nameSim * 40;
-
-    // 2. Keyword overlap with screen_id (0-1, weight 20)
-    const kwOverlap = keywordOverlap(screenKeywords, f.name);
-    score += kwOverlap * 20;
-
-    // 3. Flow-related keywords in frame name or section (weight 15)
-    const flowInName = keywordOverlap(flowKeywords, f.name);
-    const flowInSection = f.section_name ? keywordOverlap(flowKeywords, f.section_name) : 0;
-    score += Math.max(flowInName, flowInSection) * 15;
-
-    // 4. Viewport match (weight 15)
-    if (viewport && f.width > 0 && f.height > 0) {
-      if (f.width === viewport.width && f.height === viewport.height) {
-        score += 15;
-      } else if (Math.abs(f.width - viewport.width) <= 100 && Math.abs(f.height - viewport.height) <= 100) {
-        score += 8;
-      }
-    }
-
-    // 5. Page relevance: "Creating a ReSale shop" page bonus for shop flows
-    if (flowId.includes('shop') && f.page_name.toLowerCase().includes('resale')) {
-      score += 5;
-    }
-    if (flowId.includes('dashboard') && f.page_name.toLowerCase().includes('dashboard')) {
-      score += 5;
-    }
-
-    // 6. Section relevance
-    if (f.section_name) {
-      const secSim = diceCoeff(flowId, f.section_name);
-      score += secSim * 5;
-    }
-
-    // Determine rank
-    let rank: 'recommended' | 'similar' | 'other';
-    if (score >= 30) rank = 'recommended';
-    else if (score >= 15) rank = 'similar';
-    else rank = 'other';
-
-    return {
-      node_id: f.node_id,
-      name: f.name,
-      type: f.type,
-      page_name: f.page_name,
-      section_name: f.section_name,
-      width: f.width,
-      height: f.height,
-      score: Math.round(score * 10) / 10,
-      rank,
-      already_mapped: mapped.has(f.node_id),
-    };
-  }).sort((a, b) => b.score - a.score);
 }
 
 // ── Visual similarity helpers ────────────────────────────
@@ -335,29 +263,344 @@ function loadRuntimeEmbedding(screenId: string): EmbeddingEntry | null {
 }
 
 /**
- * Build a map of figma screen_id -> visual similarity score
- * by comparing a runtime embedding against all figma embeddings.
+ * Build a map from figma screen_id → { node_id, visual_score }.
+ * Compares runtime embedding for the given screen against all figma embeddings.
  */
-function computeVisualMatches(
-  screenId: string,
-  topK: number = 10,
-): Map<string, number> {
-  const result = new Map<string, number>();
+function computeVisualScoreMap(screenId: string): Map<string, { nodeId: string; score: number }> {
+  const result = new Map<string, { nodeId: string; score: number }>();
   const runtimeEmb = loadRuntimeEmbedding(screenId);
   if (!runtimeEmb) return result;
 
   const figmaEmbs = loadFigmaEmbeddings();
   if (figmaEmbs.length === 0) return result;
 
-  const scored = figmaEmbs
-    .map(fe => ({ id: fe.id, score: cosineSimilarity(runtimeEmb.embedding, fe.embedding) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK);
-
-  for (const s of scored) {
-    result.set(s.id, s.score);
+  for (const fe of figmaEmbs) {
+    const score = cosineSimilarity(runtimeEmb.embedding, fe.embedding);
+    // Resolve figma screen_id → node_id from metadata
+    const metadataPath = path.join(STORAGE_DIR, 'figma', fe.id, 'metadata.json');
+    if (!fs.existsSync(metadataPath)) continue;
+    try {
+      const meta = JSON.parse(fs.readFileSync(metadataPath, 'utf-8'));
+      const nodeId = meta.node_id || '';
+      if (nodeId) result.set(nodeId, { nodeId, score });
+    } catch { /* skip */ }
   }
+
   return result;
+}
+
+// ── Generic-layout detection ────────────────────────────
+// These patterns match common generic screens that produce false-positive
+// visual matches because they share similar structural layouts.
+
+const GENERIC_PATTERNS = [
+  /^dashboard$/i,
+  /^(home|main|landing)\s*(page)?$/i,
+  /^(list|table|grid)\s*(view)?$/i,
+  /^(form|edit|create|new)\s*(page)?$/i,
+  /^(success|done|complete|confirmation)$/i,
+  /^(error|404|500|not.found)$/i,
+  /^(info|about|help)$/i,
+  /^(empty|blank|placeholder)$/i,
+  /^(loading|spinner|skeleton)$/i,
+];
+
+function isGenericLayoutName(name: string): boolean {
+  const trimmed = name.trim();
+  return GENERIC_PATTERNS.some(p => p.test(trimmed));
+}
+
+// ── Hybrid scoring engine ────────────────────────────────
+//
+// Produces a unified final_score from three signal channels:
+//
+//   lexical_score  (0-1): string similarity between screen_id and frame name/keywords
+//   context_score  (0-1): flow/page/section/variant/viewport alignment
+//   visual_score   (0-1): cosine similarity of image embeddings
+//
+// Weights adapt based on signal availability:
+//   With visual:    visual 0.35, lexical 0.40, context 0.25
+//   Without visual: lexical 0.60, context 0.40
+//
+// False-positive suppression:
+//   If visual is high (>0.7) but lexical+context are both low (<0.15),
+//   the visual contribution is dampened. This handles structurally
+//   similar but semantically unrelated screens (dashboards, forms, lists).
+
+interface ScoringContext {
+  screenId: string;
+  flowId: string;
+  screenKeywords: string[];
+  flowKeywords: string[];
+  viewport: { width: number; height: number } | null;
+  variantKeywords: string[];
+}
+
+interface ScoreBreakdown {
+  lexical: number;     // 0-1
+  context: number;     // 0-1
+  visual: number | null; // 0-1 or null if unavailable
+  final: number;       // 0-1
+  confidence: 'high' | 'medium' | 'low';
+  reasons: string[];
+}
+
+function computeLexicalScore(frame: RawFrame, ctx: ScoringContext): number {
+  // Name similarity to screen_id (dice coefficient)
+  const nameSim = diceCoeff(ctx.screenId, frame.name);
+
+  // Keyword overlap: screen_id keywords in frame name
+  const kwOverlap = keywordOverlap(ctx.screenKeywords, frame.name);
+
+  // Combined: name similarity is most important, keywords add specificity
+  return Math.min(1, nameSim * 0.65 + kwOverlap * 0.35);
+}
+
+function computeContextScore(frame: RawFrame, ctx: ScoringContext): number {
+  let score = 0;
+  let signals = 0;
+
+  // Flow keywords in frame name or section name
+  const flowInName = keywordOverlap(ctx.flowKeywords, frame.name);
+  const flowInSection = frame.section_name ? keywordOverlap(ctx.flowKeywords, frame.section_name) : 0;
+  const flowMatch = Math.max(flowInName, flowInSection);
+  score += flowMatch;
+  signals++;
+
+  // Viewport match
+  if (ctx.viewport && frame.width > 0 && frame.height > 0) {
+    if (frame.width === ctx.viewport.width && frame.height === ctx.viewport.height) {
+      score += 1;
+    } else if (Math.abs(frame.width - ctx.viewport.width) <= 100 && Math.abs(frame.height - ctx.viewport.height) <= 100) {
+      score += 0.5;
+    }
+    signals++;
+  }
+
+  // Page relevance
+  const pageName = frame.page_name.toLowerCase();
+  const flowId = ctx.flowId.toLowerCase();
+  if (
+    (flowId.includes('shop') && pageName.includes('resale')) ||
+    (flowId.includes('dashboard') && pageName.includes('dashboard')) ||
+    (flowId.includes('auth') && (pageName.includes('auth') || pageName.includes('login')))
+  ) {
+    score += 1;
+  }
+  signals++;
+
+  // Section relevance (dice coefficient between flowId and section name)
+  if (frame.section_name) {
+    const secSim = diceCoeff(ctx.flowId, frame.section_name);
+    score += secSim;
+  }
+  signals++;
+
+  // Variant keywords in frame name
+  if (ctx.variantKeywords.length > 0) {
+    const variantMatch = keywordOverlap(ctx.variantKeywords, frame.name);
+    score += variantMatch;
+    signals++;
+  }
+
+  return signals > 0 ? Math.min(1, score / signals) : 0;
+}
+
+function computeHybridScore(
+  frame: RawFrame,
+  ctx: ScoringContext,
+  normalizedVisual: number | null,
+  visualAvailable: boolean,
+): ScoreBreakdown {
+  const lexical = computeLexicalScore(frame, ctx);
+  const context = computeContextScore(frame, ctx);
+
+  const reasons: string[] = [];
+  let final: number;
+
+  if (normalizedVisual !== null) {
+    // ── False-positive suppression ──
+    let effectiveVisual = normalizedVisual;
+
+    const lexicalWeak = lexical < 0.15;
+    const contextWeak = context < 0.15;
+
+    if (normalizedVisual > 0.7 && lexicalWeak && contextWeak) {
+      effectiveVisual = normalizedVisual * 0.35;
+    } else if (normalizedVisual > 0.6 && lexicalWeak) {
+      effectiveVisual = normalizedVisual * 0.6;
+    }
+
+    if (isGenericLayoutName(frame.name) && normalizedVisual > 0.6 && lexical < 0.25) {
+      effectiveVisual *= 0.5;
+    }
+
+    // Weighted combination: visual 0.35, lexical 0.40, context 0.25
+    final = effectiveVisual * 0.35 + lexical * 0.40 + context * 0.25;
+
+    // Reason labels
+    if (normalizedVisual >= 0.5) reasons.push('visual');
+    if (lexical >= 0.3) reasons.push('lexical');
+    if (context >= 0.3) reasons.push('context');
+    if (reasons.length >= 2) reasons.push('hybrid');
+    if (reasons.length === 0) {
+      if (normalizedVisual >= lexical && normalizedVisual >= context) reasons.push('visual');
+      else if (lexical >= context) reasons.push('lexical');
+      else reasons.push('context');
+    }
+  } else if (visualAvailable) {
+    // Visual data exists for other candidates but NOT this one.
+    // This frame has no embedding — it's an unknown. Penalize slightly
+    // so frames WITH visual data that confirms the match rank higher.
+    final = lexical * 0.55 + context * 0.35;
+    // Small penalty for missing visual confirmation
+    final *= 0.85;
+
+    if (lexical >= 0.3) reasons.push('lexical');
+    if (context >= 0.3) reasons.push('context');
+    if (reasons.length === 0) {
+      reasons.push(lexical >= context ? 'lexical' : 'context');
+    }
+  } else {
+    // No visual data at all: lexical 0.60, context 0.40
+    final = lexical * 0.60 + context * 0.40;
+
+    if (lexical >= 0.3) reasons.push('lexical');
+    if (context >= 0.3) reasons.push('context');
+    if (reasons.length === 0) {
+      reasons.push(lexical >= context ? 'lexical' : 'context');
+    }
+  }
+
+  // Score calibration: cap at 0.98
+  final = Math.min(final, 0.98);
+
+  // Confidence classification
+  let confidence: 'high' | 'medium' | 'low';
+  if (final >= 0.5 && reasons.length >= 2) {
+    confidence = 'high';
+  } else if (final >= 0.3) {
+    confidence = 'medium';
+  } else {
+    confidence = 'low';
+  }
+
+  return {
+    lexical,
+    context,
+    visual: normalizedVisual,
+    final: Math.round(final * 1000) / 1000,
+    confidence,
+    reasons,
+  };
+}
+
+// ── Visual score normalization ───────────────────────────
+// Raw cosine similarity on spatial grid embeddings clusters at the high end
+// (0.95-1.0) for structurally similar screens. We normalize visual scores
+// into a relative ranking that measures how much a candidate stands out from
+// the visual baseline. This:
+// - Preserves discriminative power (visual #1 stays ahead of visual #2)
+// - Prevents saturated visual from dominating when all scores are similar
+// - Keeps visual as a useful tiebreaker even in saturated conditions
+
+function normalizeVisualScores(
+  visualScoreMap: Map<string, { nodeId: string; score: number }>,
+): Map<string, number> {
+  const normalized = new Map<string, number>();
+  if (visualScoreMap.size === 0) return normalized;
+
+  const scores = Array.from(visualScoreMap.values()).map(v => v.score);
+  const maxScore = Math.max(...scores);
+  const minScore = Math.min(...scores);
+  const range = maxScore - minScore;
+
+  // If the range is tiny (<0.05), visual is not discriminative at all
+  // → compress all visual to a low baseline value
+  if (range < 0.05) {
+    for (const [nodeId] of visualScoreMap) {
+      normalized.set(nodeId, 0.15); // minimal tiebreaker
+    }
+    return normalized;
+  }
+
+  // Normalize to 0..1 based on min-max within the visual score distribution
+  // Then scale by the overall quality: high max with good spread = more trustworthy
+  const spreadQuality = Math.min(1, range / 0.15); // 0..1, full credit at range >= 0.15
+
+  for (const [nodeId, { score }] of visualScoreMap) {
+    const relative = (score - minScore) / range; // 0..1 within distribution
+    // Scale by spread quality: if spread is good, top candidate gets up to 0.9
+    // If spread is poor, even the top candidate gets dampened
+    normalized.set(nodeId, relative * spreadQuality * 0.9 + 0.1 * spreadQuality);
+  }
+
+  return normalized;
+}
+
+// ── Unified candidate scoring ────────────────────────────
+
+function scoreAllCandidates(
+  frames: RawFrame[],
+  screenId: string,
+  flowId: string,
+  viewport: { width: number; height: number } | null,
+  visualScoreMap: Map<string, { nodeId: string; score: number }>,
+): FigmaCandidate[] {
+  const mapped = getMappedNodeIds();
+
+  // Extract variant from screen_id (e.g. "shop_create_step_1_default" → "default")
+  const parts = screenId.split('_');
+  const variantKeywords = parts.length > 0 ? [parts[parts.length - 1]] : [];
+
+  const ctx: ScoringContext = {
+    screenId,
+    flowId,
+    screenKeywords: extractKeywords(screenId),
+    flowKeywords: extractKeywords(flowId),
+    viewport,
+    variantKeywords,
+  };
+
+  // Normalize visual scores: relative ranking instead of raw cosine
+  const normalizedVisual = normalizeVisualScores(visualScoreMap);
+  const visualAvailable = normalizedVisual.size > 0;
+
+  return frames.map(f => {
+    const normVisual = normalizedVisual.get(f.node_id) ?? null;
+
+    const breakdown = computeHybridScore(f, ctx, normVisual, visualAvailable);
+
+    // Rank based on final score
+    let rank: 'recommended' | 'similar' | 'other';
+    if (breakdown.final >= 0.4) rank = 'recommended';
+    else if (breakdown.final >= 0.2) rank = 'similar';
+    else rank = 'other';
+
+    // Display the raw visual score (before normalization) for transparency
+    const displayVisual = visualScoreMap.get(f.node_id)?.score ?? null;
+
+    return {
+      node_id: f.node_id,
+      name: f.name,
+      type: f.type,
+      page_name: f.page_name,
+      section_name: f.section_name,
+      width: f.width,
+      height: f.height,
+      final_score: breakdown.final,
+      raw_visual_score: displayVisual !== null ? Math.round(displayVisual * 1000) / 1000 : null,
+      lexical_score: Math.round(breakdown.lexical * 1000) / 1000,
+      context_score: Math.round(breakdown.context * 1000) / 1000,
+      match_confidence: breakdown.confidence,
+      match_reasons: breakdown.reasons,
+      rank,
+      already_mapped: mapped.has(f.node_id),
+      // v0.6 compat fields
+      score: Math.round(breakdown.final * 100),
+      visual_score: displayVisual !== null ? Math.round(displayVisual * 1000) / 1000 : undefined,
+    };
+  }).sort((a, b) => b.final_score - a.final_score);
 }
 
 // ── Route handler ────────────────────────────────────────
@@ -372,7 +615,7 @@ export async function GET(req: NextRequest) {
   try {
     const allFrames = extractFramesFromTree();
 
-    // If search query is provided, filter first
+    // Apply search filter
     let frames = allFrames;
     if (search) {
       const q = search.toLowerCase();
@@ -384,70 +627,18 @@ export async function GET(req: NextRequest) {
     }
 
     const viewport = vpWidth > 0 && vpHeight > 0 ? { width: vpWidth, height: vpHeight } : null;
-    const candidates = scoreCandidates(frames, screenId, flowId, viewport);
 
-    // Visual similarity: match runtime embedding against figma embeddings
-    const visualScores = computeVisualMatches(screenId);
-    const visualCandidates: FigmaCandidate[] = [];
+    // Build visual score map (node_id → score)
+    const visualScoreMap = computeVisualScoreMap(screenId);
 
-    if (visualScores.size > 0) {
-      const mapped = getMappedNodeIds();
-
-      // Match visual scores to figma frames by screen_id → find frames that
-      // share the same screen_id key in figma storage
-      for (const [figmaScreenId, score] of visualScores) {
-        // Look up the figma frame's node_id from its metadata
-        const metadataPath = path.join(STORAGE_DIR, 'figma', figmaScreenId, 'metadata.json');
-        if (!fs.existsSync(metadataPath)) continue;
-
-        let nodeId: string;
-        try {
-          const meta = JSON.parse(fs.readFileSync(metadataPath, 'utf-8'));
-          nodeId = meta.node_id || meta.figma_node_id || '';
-        } catch { continue; }
-
-        if (!nodeId) continue;
-
-        // Check if already in candidates (avoid duplicates)
-        const existing = candidates.find(c => c.node_id === nodeId);
-        if (existing) {
-          // Augment existing candidate with visual score
-          existing.visual_score = Math.round(score * 1000) / 1000;
-          if (score >= 0.7 && existing.rank !== 'recommended') {
-            existing.rank = 'visual';
-          }
-          continue;
-        }
-
-        // Find frame info from allFrames
-        const frame = allFrames.find(f => f.node_id === nodeId);
-        if (frame) {
-          visualCandidates.push({
-            node_id: frame.node_id,
-            name: frame.name,
-            type: frame.type,
-            page_name: frame.page_name,
-            section_name: frame.section_name,
-            width: frame.width,
-            height: frame.height,
-            score: Math.round(score * 100),
-            rank: 'visual',
-            already_mapped: mapped.has(frame.node_id),
-            visual_score: Math.round(score * 1000) / 1000,
-          });
-        }
-      }
-    }
-
-    // Merge: visual candidates first (if score >= 0.7), then string-based
-    const highVisual = visualCandidates.filter(c => (c.visual_score || 0) >= 0.7);
-    const merged = [...highVisual, ...candidates];
+    // Score all candidates with hybrid ranking
+    const candidates = scoreAllCandidates(frames, screenId, flowId, viewport, visualScoreMap);
 
     return NextResponse.json({
-      candidates: merged,
+      candidates,
       total_frames: allFrames.length,
       search_applied: !!search,
-      visual_matches: visualScores.size,
+      visual_available: visualScoreMap.size > 0,
     });
   } catch (err) {
     return NextResponse.json(
