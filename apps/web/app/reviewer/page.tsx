@@ -95,6 +95,28 @@ interface ScreenComparison {
 
 type ViewMode = 'list' | 'graph';
 
+// ── Mapping assistant types ──────────────────────────────
+
+interface FigmaCandidate {
+  node_id: string;
+  name: string;
+  type: string;
+  page_name: string;
+  section_name: string | null;
+  width: number;
+  height: number;
+  score: number;
+  rank: 'recommended' | 'similar' | 'other';
+  already_mapped: boolean;
+}
+
+interface MappingSaveResult {
+  status: 'saved' | 'patch_generated' | 'unchanged';
+  message: string;
+  screen_id?: string;
+  node_id?: string;
+}
+
 // ── Flow graph types ─────────────────────────────────────
 
 interface FlowNode {
@@ -1266,6 +1288,343 @@ function R({ children }: { children: React.ReactNode }) {
   return <span style={{ color: '#dc2626', fontWeight: 600 }}>{children}</span>;
 }
 
+// ── Mapping Assistant ────────────────────────────────────
+
+function MappingAssistant({
+  screen,
+  onSaved,
+  onClose,
+}: {
+  screen: ScreenData;
+  onSaved: (result: MappingSaveResult) => void;
+  onClose: () => void;
+}) {
+  const [candidates, setCandidates] = useState<FigmaCandidate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [manualNodeId, setManualNodeId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveResult, setSaveResult] = useState<MappingSaveResult | null>(null);
+  const [totalFrames, setTotalFrames] = useState(0);
+
+  // Load candidates
+  useEffect(() => {
+    setLoading(true);
+    const params = new URLSearchParams({
+      screen_id: screen.screen_id,
+      flow_id: screen.flow_id,
+    });
+    if (search) params.set('search', search);
+
+    fetch(`/api/reviewer/figma-candidates?${params}`)
+      .then(r => r.json())
+      .then(d => {
+        setCandidates(d.candidates || []);
+        setTotalFrames(d.total_frames || 0);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [screen.screen_id, screen.flow_id, search]);
+
+  const handleSave = async (nodeId: string) => {
+    setSaving(true);
+    setSaveResult(null);
+    try {
+      const res = await fetch('/api/reviewer/mapping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ screen_id: screen.screen_id, node_id: nodeId }),
+      });
+      const result = await res.json();
+      if (res.ok) {
+        setSaveResult(result);
+        onSaved(result);
+      } else {
+        setSaveResult({ status: 'unchanged', message: result.error || 'Save failed' });
+      }
+    } catch (err) {
+      setSaveResult({ status: 'unchanged', message: (err as Error).message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const recommended = candidates.filter(c => c.rank === 'recommended');
+  const similar = candidates.filter(c => c.rank === 'similar');
+  const other = candidates.filter(c => c.rank === 'other');
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Mapping Assistant</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+            Map <code style={{ background: '#f3f4f6', padding: '1px 6px', borderRadius: 3 }}>{screen.screen_id}</code> to a Figma frame
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          style={{
+            padding: '4px 12px', fontSize: 12, border: '1px solid #e5e7eb',
+            borderRadius: 4, background: '#fff', cursor: 'pointer', fontFamily: 'inherit',
+          }}
+        >
+          Close
+        </button>
+      </div>
+
+      {/* Screen context */}
+      <div style={{ padding: '10px 14px', background: '#f9fafb', borderRadius: 8, fontSize: 12 }}>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <span><strong>Flow:</strong> {screen.flow_id}</span>
+          <span><strong>Step:</strong> {screen.step}</span>
+          <span><strong>Variant:</strong> {screen.variant}</span>
+          <span><strong>Route:</strong> <code>{screen.route}</code></span>
+        </div>
+        {screen.unconfigured_reason && (
+          <div style={{ marginTop: 6, color: '#92400e', fontStyle: 'italic' }}>
+            {screen.unconfigured_reason}
+          </div>
+        )}
+      </div>
+
+      {/* Runtime preview (if available) */}
+      {screen.has_runtime_artifact && (
+        <div>
+          <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, marginBottom: 4 }}>Runtime Screenshot</div>
+          <img
+            src={imgUrl('runtime', screen.screen_id)}
+            alt="Runtime"
+            style={{ width: '100%', maxWidth: 600, border: '1px solid #e5e7eb', borderRadius: 4 }}
+            loading="lazy"
+          />
+        </div>
+      )}
+
+      {/* Save result */}
+      {saveResult && (
+        <div style={{
+          padding: '10px 14px',
+          borderRadius: 8,
+          fontSize: 12,
+          background: saveResult.status === 'saved' ? '#f0fdf4' : '#fef2f2',
+          border: `1px solid ${saveResult.status === 'saved' ? '#bbf7d0' : '#fecaca'}`,
+          color: saveResult.status === 'saved' ? '#166534' : '#991b1b',
+        }}>
+          <div style={{ fontWeight: 600 }}>
+            {saveResult.status === 'saved' ? 'Mapping saved!' : 'Error'}
+          </div>
+          <div style={{ marginTop: 2 }}>{saveResult.message}</div>
+          {saveResult.status === 'saved' && (
+            <div style={{ marginTop: 6, padding: '6px 10px', background: '#ecfdf5', borderRadius: 4, color: '#065f46' }}>
+              Next step: run <code>pnpm reviewer:run --screen {screen.screen_id}</code> to generate the diff.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Manual node_id input */}
+      <div style={{
+        padding: '10px 14px', background: '#f9fafb', borderRadius: 8,
+        display: 'flex', gap: 8, alignItems: 'center',
+      }}>
+        <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 500, whiteSpace: 'nowrap' }}>Paste node_id:</span>
+        <input
+          type="text"
+          placeholder="e.g. 24:45"
+          value={manualNodeId}
+          onChange={e => setManualNodeId(e.target.value)}
+          style={{
+            flex: 1, fontSize: 12, padding: '4px 8px', border: '1px solid #e5e7eb',
+            borderRadius: 4, fontFamily: 'monospace',
+          }}
+        />
+        <button
+          onClick={() => { if (manualNodeId.trim()) handleSave(manualNodeId.trim()); }}
+          disabled={saving || !manualNodeId.trim()}
+          style={{
+            padding: '4px 14px', fontSize: 12, fontWeight: 600,
+            border: 'none', borderRadius: 4, background: '#2563eb', color: '#fff',
+            cursor: saving || !manualNodeId.trim() ? 'default' : 'pointer',
+            opacity: saving || !manualNodeId.trim() ? 0.5 : 1,
+            fontFamily: 'inherit',
+          }}
+        >
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+
+      {/* Search */}
+      <div>
+        <input
+          type="text"
+          placeholder="Search frames by name, node_id, or section..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{
+            width: '100%', fontSize: 12, padding: '6px 10px', border: '1px solid #e5e7eb',
+            borderRadius: 4, fontFamily: 'inherit',
+          }}
+        />
+        <div style={{ fontSize: 10, color: '#a1a1aa', marginTop: 2 }}>
+          {totalFrames} frames in Figma file{candidates.length < totalFrames ? ` / ${candidates.length} matching` : ''}
+        </div>
+      </div>
+
+      {/* Candidate groups */}
+      {loading ? (
+        <div style={{ padding: 20, textAlign: 'center', color: '#6b7280', fontSize: 13 }}>
+          Loading candidates...
+        </div>
+      ) : (
+        <>
+          {recommended.length > 0 && (
+            <CandidateGroup
+              title="Recommended"
+              color="#16a34a"
+              candidates={recommended}
+              onSelect={handleSave}
+              saving={saving}
+            />
+          )}
+          {similar.length > 0 && (
+            <CandidateGroup
+              title="Similar"
+              color="#ca8a04"
+              candidates={similar}
+              onSelect={handleSave}
+              saving={saving}
+            />
+          )}
+          {other.length > 0 && (
+            <CandidateGroup
+              title="All Frames"
+              color="#6b7280"
+              candidates={other}
+              onSelect={handleSave}
+              saving={saving}
+              defaultCollapsed
+            />
+          )}
+          {candidates.length === 0 && (
+            <div style={{ padding: 20, textAlign: 'center', color: '#a1a1aa', fontSize: 13 }}>
+              No Figma frames found. Ensure figma_tree.json exists in storage/.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CandidateGroup({
+  title,
+  color,
+  candidates,
+  onSelect,
+  saving,
+  defaultCollapsed = false,
+}: {
+  title: string;
+  color: string;
+  candidates: FigmaCandidate[];
+  onSelect: (nodeId: string) => void;
+  saving: boolean;
+  defaultCollapsed?: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
+  return (
+    <div>
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0',
+          background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+          fontSize: 12, fontWeight: 600, color,
+        }}
+      >
+        <span style={{ fontSize: 10 }}>{collapsed ? '\u25B6' : '\u25BC'}</span>
+        {title} ({candidates.length})
+      </button>
+      {!collapsed && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+          {candidates.map(c => (
+            <CandidateRow key={c.node_id} candidate={c} onSelect={onSelect} saving={saving} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CandidateRow({
+  candidate,
+  onSelect,
+  saving,
+}: {
+  candidate: FigmaCandidate;
+  onSelect: (nodeId: string) => void;
+  saving: boolean;
+}) {
+  const c = candidate;
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '8px 12px', borderRadius: 6,
+        border: '1px solid #e5e7eb',
+        background: c.already_mapped ? '#fafafa' : '#fff',
+        fontSize: 12,
+        opacity: c.already_mapped ? 0.6 : 1,
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontWeight: 600 }}>{c.name}</span>
+          {c.already_mapped && (
+            <span style={{
+              fontSize: 9, padding: '1px 5px', borderRadius: 3,
+              background: '#e5e7eb', color: '#6b7280', fontWeight: 600,
+            }}>
+              MAPPED
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>
+          <code>{c.node_id}</code>
+          {' '}&middot;{' '}{c.width}x{c.height}
+          {c.section_name && <>{' '}&middot;{' '}{c.section_name}</>}
+          {c.page_name && <>{' '}&middot;{' '}{c.page_name}</>}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{
+          fontSize: 10, color: '#9ca3af', fontFamily: 'monospace',
+        }}>
+          {c.score.toFixed(0)}pt
+        </span>
+        <button
+          onClick={() => onSelect(c.node_id)}
+          disabled={saving}
+          style={{
+            padding: '3px 10px', fontSize: 11, fontWeight: 600,
+            border: 'none', borderRadius: 4,
+            background: c.already_mapped ? '#e5e7eb' : '#2563eb',
+            color: c.already_mapped ? '#6b7280' : '#fff',
+            cursor: saving ? 'default' : 'pointer',
+            opacity: saving ? 0.5 : 1,
+            fontFamily: 'inherit',
+          }}
+        >
+          Select
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Data fetching hooks ──────────────────────────────────
 
 function useRuns() {
@@ -1378,6 +1737,7 @@ export default function ReviewerPage() {
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [filterFlow, setFilterFlow] = useState<string>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('graph');
+  const [mappingScreenId, setMappingScreenId] = useState<string | null>(null);
 
   const sparklines = useSparklineData(runs);
 
@@ -1483,7 +1843,7 @@ export default function ReviewerPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ fontWeight: 700, fontSize: 16 }}>FlowCanvas Reviewer</span>
-            <span style={{ fontSize: 11, color: '#9ca3af' }}>v0.3</span>
+            <span style={{ fontSize: 11, color: '#9ca3af' }}>v0.4</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {/* View toggle */}
@@ -1679,14 +2039,49 @@ export default function ReviewerPage() {
           </div>
         )}
 
-        {/* Inspector */}
+        {/* Inspector / Mapping Assistant */}
         <div style={{ flex: 1, overflow: 'auto', padding: 20, minWidth: 0 }}>
-          {selected ? (
-            <Inspector
-              screen={selected}
-              runId={run?.run_id}
-              comparison={comparisons.get(selected.screen_id)}
+          {mappingScreenId && screenMap.get(mappingScreenId) ? (
+            <MappingAssistant
+              screen={screenMap.get(mappingScreenId)!}
+              onSaved={() => {
+                // Reload data after save
+                setMappingScreenId(null);
+                setCurrentRunId(prev => prev); // trigger refresh
+              }}
+              onClose={() => setMappingScreenId(null)}
             />
+          ) : selected ? (
+            <>
+              <Inspector
+                screen={selected}
+                runId={run?.run_id}
+                comparison={comparisons.get(selected.screen_id)}
+              />
+              {/* Map Figma button for unconfigured screens */}
+              {selected.readiness === 'unconfigured' && (
+                <div style={{ marginTop: 16, padding: '12px 16px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0369a1' }}>This screen needs a Figma mapping</div>
+                      <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                        Use the Mapping Assistant to connect this screen to a Figma frame.
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setMappingScreenId(selected.screen_id)}
+                      style={{
+                        padding: '6px 16px', fontSize: 12, fontWeight: 600,
+                        border: 'none', borderRadius: 6, background: '#2563eb', color: '#fff',
+                        cursor: 'pointer', fontFamily: 'inherit',
+                      }}
+                    >
+                      Map Figma Frame
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <div style={{
               display: 'flex',

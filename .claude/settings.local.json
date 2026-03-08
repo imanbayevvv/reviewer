@@ -25,7 +25,8 @@
       "Bash(python3:*)",
       "Bash(pnpm:*)",
       "Bash(source .env:*)",
-      "Bash(npx:*)"
+      "Bash(npx:*)",
+      "Bash(grep:*)"
     ]
   }
 }
