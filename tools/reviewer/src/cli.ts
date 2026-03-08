@@ -10,6 +10,7 @@ import { generateReport, saveReport } from './report-html.js';
 import { generateRunId, isoNow, getGitCommit, getGitBranch } from './utils.js';
 import { RUNS_STORAGE } from './config.js';
 import { findLatestManifest, loadManifest, detectRegressions, saveRegressionReport } from './regression.js';
+import { runPRCommentCLI } from './pr-comment.js';
 
 // ── Shared options ───────────────────────────────────────
 
@@ -387,6 +388,17 @@ const regressCmd = new Command('regress')
     }
   });
 program.addCommand(regressCmd);
+
+// reviewer pr-comment — generate PR comment markdown from a run
+program
+  .command('pr-comment')
+  .description('Generate GitHub PR comment markdown from a diff run')
+  .requiredOption('--run <run_id>', 'Run ID to generate comment for')
+  .option('--output <path>', 'Write to file instead of stdout')
+  .option('--artifact-url <url>', 'Link to downloadable artifact')
+  .action((opts: { run: string; output?: string; artifactUrl?: string }) => {
+    runPRCommentCLI(opts.run, opts.output, opts.artifactUrl);
+  });
 
 // reviewer list — utility to show registry contents (always shows all)
 program

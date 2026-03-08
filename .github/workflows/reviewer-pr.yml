@@ -1,0 +1,228 @@
+name: Reviewer PR Visual Diff
+
+on:
+  pull_request:
+    branches: [main]
+
+# Only one reviewer run per PR at a time
+concurrency:
+  group: reviewer-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+env:
+  DATABASE_URL: postgresql://resale:resale_dev@localhost:5432/resale
+  REDIS_URL: redis://localhost:6379
+  REVIEWER_APP_URL: http://localhost:3000
+  REVIEWER_API_URL: http://localhost:4000
+  REVIEWER_SEED_USER_EMAIL: imanbaev01@gmail.com
+  REVIEWER_SEED_USER_PASSWORD: '12345678'
+  # No FIGMA_TOKEN — PR runs use cached Figma baselines (fast mode)
+  NEXT_PUBLIC_SNAPSHOT_MODE: 'true'
+
+jobs:
+  reviewer:
+    name: Visual Diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: resale
+          POSTGRES_USER: resale
+          POSTGRES_PASSWORD: resale_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm -C tools/reviewer exec playwright install --with-deps chromium
+
+      # ── Restore cached artifacts (Figma baselines + previous runs) ──
+      - name: Restore baseline artifacts
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            storage/figma
+            storage/runtime
+            storage/runs
+          key: reviewer-artifacts-main
+          restore-keys: |
+            reviewer-artifacts-
+
+      # ── Database setup ──
+      - name: Run database migrations
+        run: pnpm -C apps/api exec prisma migrate deploy
+
+      - name: Seed database
+        run: pnpm -C apps/api exec prisma db seed
+
+      # ── Start servers ──
+      - name: Start API server
+        run: |
+          pnpm -C apps/api dev &
+          for i in $(seq 1 30); do
+            curl -s http://localhost:4000/health > /dev/null && break
+            sleep 2
+          done
+
+      - name: Start web server
+        run: |
+          pnpm -C apps/web dev &
+          for i in $(seq 1 30); do
+            curl -s http://localhost:3000 > /dev/null && break
+            sleep 2
+          done
+
+      # ── Fast reviewer pipeline (skip Figma re-fetch) ──
+      - name: Capture runtime screenshots
+        run: pnpm -C tools/reviewer cli runtime 2>&1 | tee runtime-output.txt
+
+      - name: Run visual diff
+        id: diff
+        run: |
+          pnpm -C tools/reviewer cli diff 2>&1 | tee diff-output.txt
+
+          # Extract run ID
+          RUN_ID=$(grep -oP 'Diff manifest:\s+.*runs/\K[^/]+' diff-output.txt || echo "unknown")
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Run ID: $RUN_ID"
+
+      # ── Regression detection ──
+      - name: Detect regressions
+        id: regress
+        run: |
+          pnpm -C tools/reviewer cli regress --fail-on-regression 2>&1 | tee regression-output.txt
+        continue-on-error: true
+
+      # ── Generate PR comment ──
+      - name: Generate PR comment
+        id: comment
+        if: always() && steps.diff.outputs.run_id != 'unknown'
+        run: |
+          ARTIFACT_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          pnpm -C tools/reviewer cli pr-comment \
+            --run "${{ steps.diff.outputs.run_id }}" \
+            --output pr-comment.md \
+            --artifact-url "$ARTIFACT_URL"
+
+      # ── Post or update PR comment ──
+      - name: Post PR comment
+        if: always() && steps.comment.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('pr-comment.md', 'utf-8');
+            const marker = '<!-- flowcanvas-reviewer -->';
+            const fullBody = marker + '\n' + body;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+
+            const existing = comments.find(c => c.body?.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: fullBody,
+              });
+              console.log(`Updated existing comment: ${existing.id}`);
+            } else {
+              const { data: created } = await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fullBody,
+              });
+              console.log(`Created new comment: ${created.id}`);
+            }
+
+      # ── Upload artifacts ──
+      - name: Upload diff artifacts
+        uses: actions/upload-artifact@v4
+        if: always() && steps.diff.outputs.run_id != 'unknown'
+        with:
+          name: reviewer-pr-${{ github.event.pull_request.number }}-${{ steps.diff.outputs.run_id }}
+          path: |
+            storage/runs/${{ steps.diff.outputs.run_id }}/report.html
+            storage/runs/${{ steps.diff.outputs.run_id }}/diff-manifest.json
+            storage/runs/${{ steps.diff.outputs.run_id }}/regression-report.json
+            storage/runs/${{ steps.diff.outputs.run_id }}/diff/
+          retention-days: 7
+
+      # ── Post job summary ──
+      - name: Post job summary
+        if: always()
+        run: |
+          echo "## Reviewer PR Visual Diff" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Run ID:** \`${{ steps.diff.outputs.run_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**PR:** #${{ github.event.pull_request.number }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Commit:** \`$(git rev-parse --short HEAD)\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f diff-output.txt ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            sed -n '/DIFF SUMMARY/,/======/p' diff-output.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ -f regression-output.txt ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Regression Detection" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            sed -n '/REGRESSION REPORT/,/======/p' regression-output.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # ── Fail on unexpected regressions ──
+      - name: Fail on unexpected regressions
+        if: steps.regress.outcome == 'failure'
+        run: |
+          echo "::error::Unexpected visual regressions detected! Review the FlowCanvas Reviewer comment on this PR."
+          exit 1

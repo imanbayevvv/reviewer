@@ -72,7 +72,7 @@ screens:
       strategy: direct
     figma:
       file_key: "eSn1fOnDgiIQUbBBhrdrOs"
-      node_id: "174:1539"
+      node_id: "TODO_FIGMA_NODE_ID"
     viewport: { width: 1440, height: 1024 }
     masks: []
     thresholds:
@@ -80,7 +80,7 @@ screens:
       structural_similarity: 0.95
     tags: [auth, form, mvp]
     notes: "Centered registration form with name/email/password fields."
-    unconfigured_reason: null
+    unconfigured_reason: "No auth screens exist in Figma file — not yet designed"
 
   # ── Dashboard Flow ─────────────────────────────────────
 
