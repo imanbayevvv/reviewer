@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
@@ -17,8 +17,19 @@ function getScreenReadiness(screen: any): string {
   return 'ready';
 }
 
-function findLatestDiffManifest(): any | null {
+function findDiffManifest(runId?: string | null): any | null {
   if (!fs.existsSync(RUNS_DIR)) return null;
+
+  if (runId) {
+    const manifestPath = path.join(RUNS_DIR, runId, 'diff-manifest.json');
+    if (!fs.existsSync(manifestPath)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+
   const entries = fs.readdirSync(RUNS_DIR, { withFileTypes: true })
     .filter(e => e.isDirectory())
     .map(e => e.name)
@@ -48,7 +59,8 @@ function findRegressionReport(runId: string): any | null {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const runId = req.nextUrl.searchParams.get('run');
   try {
     // Load registry
     const screensRaw = fs.readFileSync(SCREENS_YAML, 'utf-8');
@@ -69,8 +81,8 @@ export async function GET() {
       masks: (s.masks || []).map((m: any) => ({ selector: m.selector, reason: m.reason })),
     }));
 
-    // Load latest diff manifest
-    const manifest = findLatestDiffManifest();
+    // Load diff manifest (specific run or latest)
+    const manifest = findDiffManifest(runId);
 
     // Load regression report if available
     const regression = manifest ? findRegressionReport(manifest.run_id) : null;

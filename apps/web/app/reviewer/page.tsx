@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 
 // ── Types ────────────────────────────────────────────────
 
@@ -71,7 +71,27 @@ interface ReviewerData {
   } | null;
 }
 
-type FilterStatus = 'all' | 'failed' | 'unconfigured' | 'pass';
+interface RunEntry {
+  run_id: string;
+  timestamp: string;
+  git_commit: string;
+  git_branch: string;
+  summary: { passed: number; failed: number; skipped: number; errored: number } | null;
+  screen_count: number;
+  has_regression_report: boolean;
+}
+
+type FilterStatus = 'all' | 'failed' | 'unconfigured' | 'pass' | 'regression' | 'improved';
+
+type RegressionLabel = 'REGRESSION' | 'IMPROVED' | 'NEW_SCREEN' | 'UNCHANGED';
+
+interface ScreenComparison {
+  screen_id: string;
+  label: RegressionLabel;
+  currentMismatch: number | null;
+  baselineMismatch: number | null;
+  delta: number | null;
+}
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -125,6 +145,50 @@ function formatTime(iso: string): string {
   }
 }
 
+function formatRunLabel(run: RunEntry): string {
+  const d = run.timestamp ? new Date(run.timestamp) : null;
+  const dateStr = d
+    ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    : run.run_id;
+  return `${dateStr}  (${run.git_commit.slice(0, 7)})`;
+}
+
+function regressionBadgeColor(label: RegressionLabel): { bg: string; fg: string } {
+  switch (label) {
+    case 'REGRESSION': return { bg: '#dc2626', fg: '#fff' };
+    case 'IMPROVED': return { bg: '#16a34a', fg: '#fff' };
+    case 'NEW_SCREEN': return { bg: '#2563eb', fg: '#fff' };
+    case 'UNCHANGED': return { bg: '#e5e7eb', fg: '#6b7280' };
+  }
+}
+
+function classifyScreen(
+  currentScreen: ScreenData | undefined,
+  baselineScreen: ScreenData | undefined,
+): RegressionLabel {
+  if (!baselineScreen) return 'NEW_SCREEN';
+  if (!currentScreen) return 'UNCHANGED';
+
+  const curStatus = currentScreen.diff_status;
+  const baseStatus = baselineScreen.diff_status;
+
+  // PASS -> FAIL = REGRESSION
+  if (baseStatus === 'pass' && curStatus === 'fail') return 'REGRESSION';
+  // FAIL -> PASS = IMPROVED
+  if (baseStatus === 'fail' && curStatus === 'pass') return 'IMPROVED';
+
+  const curMismatch = currentScreen.mismatch_percent ?? 0;
+  const baseMismatch = baselineScreen.mismatch_percent ?? 0;
+  const delta = curMismatch - baseMismatch;
+
+  // Mismatch increase > 0.5pp = REGRESSION
+  if (delta > 0.5) return 'REGRESSION';
+  // Mismatch decrease > 0.5pp = IMPROVED
+  if (delta < -0.5) return 'IMPROVED';
+
+  return 'UNCHANGED';
+}
+
 // ── Components ───────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
@@ -167,14 +231,205 @@ function DriftBadge({ drift }: { drift: string }) {
   );
 }
 
+function RegressionBadge({ label }: { label: RegressionLabel }) {
+  if (label === 'UNCHANGED') return null;
+  const { bg, fg } = regressionBadgeColor(label);
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        padding: '1px 8px',
+        borderRadius: 4,
+        background: bg,
+        color: fg,
+        fontSize: 10,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+      }}
+    >
+      {label.replace('_', ' ')}
+    </span>
+  );
+}
+
+function Sparkline({ values, width = 80, height = 24 }: { values: (number | null)[]; width?: number; height?: number }) {
+  const nums = values.filter((v): v is number => v !== null);
+  if (nums.length < 2) return null;
+
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  const range = max - min || 1;
+
+  const points = nums.map((v, i) => {
+    const x = (i / (nums.length - 1)) * width;
+    const y = height - 2 - ((v - min) / range) * (height - 4);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  const lastVal = nums[nums.length - 1];
+  const prevVal = nums[nums.length - 2];
+  const trending = lastVal > prevVal ? '#ef4444' : lastVal < prevVal ? '#22c55e' : '#6b7280';
+
+  return (
+    <svg width={width} height={height} style={{ display: 'block' }}>
+      <polyline
+        points={points}
+        fill="none"
+        stroke={trending}
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      {/* Last point dot */}
+      <circle
+        cx={(nums.length - 1) / (nums.length - 1) * width}
+        cy={height - 2 - ((lastVal - min) / range) * (height - 4)}
+        r="2"
+        fill={trending}
+      />
+    </svg>
+  );
+}
+
+function RunSelector({
+  runs,
+  currentRunId,
+  baselineRunId,
+  onCurrentChange,
+  onBaselineChange,
+}: {
+  runs: RunEntry[];
+  currentRunId: string;
+  baselineRunId: string;
+  onCurrentChange: (id: string) => void;
+  onBaselineChange: (id: string) => void;
+}) {
+  return (
+    <div style={{ display: 'flex', gap: 16, alignItems: 'center', fontSize: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ color: '#6b7280', fontWeight: 500 }}>Current Run:</span>
+        <select
+          value={currentRunId}
+          onChange={e => onCurrentChange(e.target.value)}
+          style={{
+            fontSize: 12,
+            padding: '4px 8px',
+            border: '1px solid #e5e7eb',
+            borderRadius: 4,
+            background: '#fff',
+            fontFamily: 'monospace',
+            minWidth: 240,
+          }}
+        >
+          {runs.map(r => (
+            <option key={r.run_id} value={r.run_id}>{formatRunLabel(r)}</option>
+          ))}
+        </select>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ color: '#6b7280', fontWeight: 500 }}>Baseline Run:</span>
+        <select
+          value={baselineRunId}
+          onChange={e => onBaselineChange(e.target.value)}
+          style={{
+            fontSize: 12,
+            padding: '4px 8px',
+            border: '1px solid #e5e7eb',
+            borderRadius: 4,
+            background: '#fff',
+            fontFamily: 'monospace',
+            minWidth: 240,
+          }}
+        >
+          {runs.map(r => (
+            <option key={r.run_id} value={r.run_id}>{formatRunLabel(r)}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+
+function RegressionSummary({
+  comparisons,
+  onFilter,
+}: {
+  comparisons: Map<string, ScreenComparison>;
+  onFilter: (f: FilterStatus) => void;
+}) {
+  let regressions = 0;
+  let improvements = 0;
+  let stable = 0;
+  let newScreens = 0;
+
+  comparisons.forEach(c => {
+    switch (c.label) {
+      case 'REGRESSION': regressions++; break;
+      case 'IMPROVED': improvements++; break;
+      case 'NEW_SCREEN': newScreens++; break;
+      case 'UNCHANGED': stable++; break;
+    }
+  });
+
+  return (
+    <div style={{
+      display: 'flex',
+      gap: 16,
+      padding: '8px 16px',
+      background: regressions > 0 ? '#fef2f2' : '#f0fdf4',
+      borderRadius: 8,
+      fontSize: 13,
+      alignItems: 'center',
+      border: `1px solid ${regressions > 0 ? '#fecaca' : '#bbf7d0'}`,
+    }}>
+      <span style={{ fontWeight: 600, color: '#374151' }}>Run Comparison</span>
+      <button onClick={() => onFilter('regression')} style={summaryLinkStyle}>
+        <span style={{ fontWeight: 700, color: '#dc2626' }}>{regressions}</span>
+        <span style={{ color: '#6b7280' }}> Regressions</span>
+      </button>
+      <button onClick={() => onFilter('improved')} style={summaryLinkStyle}>
+        <span style={{ fontWeight: 700, color: '#16a34a' }}>{improvements}</span>
+        <span style={{ color: '#6b7280' }}> Improvements</span>
+      </button>
+      <span>
+        <span style={{ fontWeight: 700, color: '#6b7280' }}>{stable}</span>
+        <span style={{ color: '#9ca3af' }}> Stable</span>
+      </span>
+      {newScreens > 0 && (
+        <span>
+          <span style={{ fontWeight: 700, color: '#2563eb' }}>{newScreens}</span>
+          <span style={{ color: '#9ca3af' }}> New</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+const summaryLinkStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  fontSize: 'inherit',
+  padding: 0,
+  textDecoration: 'underline',
+  textDecorationStyle: 'dotted',
+  textUnderlineOffset: '2px',
+};
+
 function ScreenCard({
   screen,
   isSelected,
   onClick,
+  regressionLabel,
+  sparklineValues,
 }: {
   screen: ScreenData;
   isSelected: boolean;
   onClick: () => void;
+  regressionLabel?: RegressionLabel;
+  sparklineValues?: (number | null)[];
 }) {
   const status = getEffectiveStatus(screen);
   const pct = screen.mismatch_percent;
@@ -202,6 +457,7 @@ function ScreenCard({
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <StatusBadge status={status} />
           <DriftBadge drift={screen.drift_classification} />
+          {regressionLabel && <RegressionBadge label={regressionLabel} />}
           {pct !== null && (
             <span style={{ fontSize: 11, color: '#6b7280' }}>
               {pct.toFixed(2)}%
@@ -224,6 +480,11 @@ function ScreenCard({
           {screen.flow_id} / step {screen.step} / {screen.variant}
         </div>
       </div>
+      {sparklineValues && sparklineValues.length >= 2 && (
+        <div style={{ flexShrink: 0 }}>
+          <Sparkline values={sparklineValues} />
+        </div>
+      )}
     </button>
   );
 }
@@ -337,9 +598,11 @@ function ImagePanel({
 function Inspector({
   screen,
   runId,
+  comparison,
 }: {
   screen: ScreenData;
   runId: string | undefined;
+  comparison?: ScreenComparison;
 }) {
   const status = getEffectiveStatus(screen);
 
@@ -350,12 +613,33 @@ function Inspector({
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <StatusBadge status={status} />
           <DriftBadge drift={screen.drift_classification} />
+          {comparison && <RegressionBadge label={comparison.label} />}
           <span style={{ fontWeight: 700, fontSize: 16 }}>{screen.screen_id}</span>
         </div>
         <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
           {screen.flow_id} / step {screen.step} / {screen.variant} &mdash; <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>{screen.route}</code>
         </div>
       </div>
+
+      {/* Comparison delta */}
+      {comparison && comparison.delta !== null && comparison.label !== 'UNCHANGED' && (
+        <div style={{
+          padding: '6px 12px',
+          background: comparison.label === 'REGRESSION' ? '#fef2f2' : '#f0fdf4',
+          borderRadius: 6,
+          fontSize: 12,
+          border: `1px solid ${comparison.label === 'REGRESSION' ? '#fecaca' : '#bbf7d0'}`,
+        }}>
+          <span style={{ fontWeight: 600, color: comparison.label === 'REGRESSION' ? '#dc2626' : '#16a34a' }}>
+            {comparison.label === 'REGRESSION' ? 'Mismatch increased' : 'Mismatch decreased'}
+          </span>
+          {' '}
+          <span style={{ color: '#6b7280' }}>
+            {comparison.baselineMismatch?.toFixed(2)}% &rarr; {comparison.currentMismatch?.toFixed(2)}%
+            ({comparison.delta > 0 ? '+' : ''}{comparison.delta.toFixed(2)}pp)
+          </span>
+        </div>
+      )}
 
       {/* Metrics bar */}
       {screen.mismatch_percent !== null && (
@@ -467,34 +751,145 @@ function R({ children }: { children: React.ReactNode }) {
   return <span style={{ color: '#dc2626', fontWeight: 600 }}>{children}</span>;
 }
 
-// ── Main Page ────────────────────────────────────────────
+// ── Data fetching hooks ──────────────────────────────────
 
-export default function ReviewerPage() {
-  const [data, setData] = useState<ReviewerData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
-  const [filterFlow, setFilterFlow] = useState<string>('all');
+function useRuns() {
+  const [runs, setRuns] = useState<RunEntry[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/reviewer/data')
+    fetch('/api/reviewer/runs')
+      .then(r => r.json())
+      .then(d => setRuns(d.runs || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  return { runs, loading };
+}
+
+function useRunData(runId: string | null) {
+  const [data, setData] = useState<ReviewerData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!runId) return;
+    setLoading(true);
+    setError(null);
+    const url = runId ? `/api/reviewer/data?run=${encodeURIComponent(runId)}` : '/api/reviewer/data';
+    fetch(url)
       .then(r => r.json())
       .then(d => {
         if (d.error) setError(d.error);
         else setData(d);
       })
-      .catch(e => setError(e.message));
-  }, []);
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [runId]);
 
-  const filteredScreens = data?.screens.filter(s => {
+  return { data, error, loading };
+}
+
+// ── Sparkline data: collect mismatch values across runs ──
+
+function useSparklineData(runs: RunEntry[]) {
+  const [sparklines, setSparklines] = useState<Map<string, (number | null)[]>>(new Map());
+
+  useEffect(() => {
+    if (runs.length < 2) return;
+
+    // Take last 10 runs (chronological order, oldest first)
+    const recentRuns = runs.slice(0, 10).reverse();
+
+    Promise.all(
+      recentRuns.map(r =>
+        fetch(`/api/reviewer/data?run=${encodeURIComponent(r.run_id)}`)
+          .then(res => res.json())
+          .then(d => ({ runId: r.run_id, screens: (d.screens || []) as ScreenData[] }))
+          .catch(() => ({ runId: r.run_id, screens: [] as ScreenData[] }))
+      )
+    ).then(results => {
+      const map = new Map<string, (number | null)[]>();
+      // Collect all screen IDs
+      const allScreenIds = new Set<string>();
+      results.forEach(r => r.screens.forEach(s => allScreenIds.add(s.screen_id)));
+
+      allScreenIds.forEach(sid => {
+        const values = results.map(r => {
+          const screen = r.screens.find(s => s.screen_id === sid);
+          return screen?.mismatch_percent ?? null;
+        });
+        map.set(sid, values);
+      });
+
+      setSparklines(map);
+    });
+  }, [runs]);
+
+  return sparklines;
+}
+
+// ── Main Page ────────────────────────────────────────────
+
+export default function ReviewerPage() {
+  const { runs, loading: runsLoading } = useRuns();
+
+  // Default: current = latest, baseline = previous
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
+  const [baselineRunId, setBaselineRunId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (runs.length > 0 && !currentRunId) {
+      setCurrentRunId(runs[0].run_id);
+      if (runs.length > 1) setBaselineRunId(runs[1].run_id);
+      else setBaselineRunId(runs[0].run_id);
+    }
+  }, [runs, currentRunId]);
+
+  const { data: currentData, error: currentError, loading: currentLoading } = useRunData(currentRunId);
+  const { data: baselineData } = useRunData(baselineRunId);
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
+  const [filterFlow, setFilterFlow] = useState<string>('all');
+
+  const sparklines = useSparklineData(runs);
+
+  // Build comparison map
+  const comparisons = useMemo(() => {
+    const map = new Map<string, ScreenComparison>();
+    if (!currentData || !baselineData || currentRunId === baselineRunId) return map;
+
+    const baselineMap = new Map<string, ScreenData>();
+    baselineData.screens.forEach(s => baselineMap.set(s.screen_id, s));
+
+    currentData.screens.forEach(s => {
+      const baseline = baselineMap.get(s.screen_id);
+      const label = classifyScreen(s, baseline);
+      map.set(s.screen_id, {
+        screen_id: s.screen_id,
+        label,
+        currentMismatch: s.mismatch_percent,
+        baselineMismatch: baseline?.mismatch_percent ?? null,
+        delta: (s.mismatch_percent ?? 0) - (baseline?.mismatch_percent ?? 0),
+      });
+    });
+
+    return map;
+  }, [currentData, baselineData, currentRunId, baselineRunId]);
+
+  const filteredScreens = currentData?.screens.filter(s => {
     if (filterFlow !== 'all' && s.flow_id !== filterFlow) return false;
     if (filterStatus === 'failed') return s.diff_status === 'fail' || s.diff_status === 'error';
     if (filterStatus === 'unconfigured') return s.readiness === 'unconfigured';
     if (filterStatus === 'pass') return s.diff_status === 'pass';
+    if (filterStatus === 'regression') return comparisons.get(s.screen_id)?.label === 'REGRESSION';
+    if (filterStatus === 'improved') return comparisons.get(s.screen_id)?.label === 'IMPROVED';
     return true;
   }) ?? [];
 
-  const selected = data?.screens.find(s => s.screen_id === selectedId) ?? null;
+  const selected = currentData?.screens.find(s => s.screen_id === selectedId) ?? null;
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (!filteredScreens.length) return;
@@ -516,16 +911,16 @@ export default function ReviewerPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
-  if (error) {
+  if (currentError) {
     return (
       <div style={{ padding: 40, fontFamily: 'system-ui, sans-serif' }}>
         <h1 style={{ color: '#dc2626' }}>Error</h1>
-        <pre style={{ marginTop: 8, background: '#fef2f2', padding: 16, borderRadius: 8 }}>{error}</pre>
+        <pre style={{ marginTop: 8, background: '#fef2f2', padding: 16, borderRadius: 8 }}>{currentError}</pre>
       </div>
     );
   }
 
-  if (!data) {
+  if (runsLoading || currentLoading || !currentData) {
     return (
       <div style={{ padding: 40, fontFamily: 'system-ui, sans-serif', color: '#6b7280' }}>
         Loading reviewer data...
@@ -533,9 +928,10 @@ export default function ReviewerPage() {
     );
   }
 
-  const run = data.run;
+  const run = currentData.run;
   const summary = run?.summary;
   const cov = run?.coverage;
+  const hasComparison = currentRunId !== baselineRunId && comparisons.size > 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', color: '#111', background: '#fafafa' }}>
@@ -544,17 +940,36 @@ export default function ReviewerPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ fontWeight: 700, fontSize: 16 }}>FlowCanvas Reviewer</span>
-            <span style={{ fontSize: 11, color: '#9ca3af' }}>v0.1</span>
+            <span style={{ fontSize: 11, color: '#9ca3af' }}>v0.2</span>
           </div>
           {run && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 12, color: '#6b7280' }}>
-              <span>Run: <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: 3 }}>{run.run_id}</code></span>
               <span>Branch: <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: 3 }}>{run.git_branch}</code></span>
               <span>Commit: <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: 3 }}>{run.git_commit}</code></span>
               <span>{formatTime(run.started_at)}</span>
             </div>
           )}
         </div>
+
+        {/* Run selector */}
+        {runs.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <RunSelector
+              runs={runs}
+              currentRunId={currentRunId || ''}
+              baselineRunId={baselineRunId || ''}
+              onCurrentChange={setCurrentRunId}
+              onBaselineChange={setBaselineRunId}
+            />
+          </div>
+        )}
+
+        {/* Regression summary panel */}
+        {hasComparison && (
+          <div style={{ marginTop: 10 }}>
+            <RegressionSummary comparisons={comparisons} onFilter={setFilterStatus} />
+          </div>
+        )}
 
         {/* Summary stats + filters */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
@@ -581,6 +996,12 @@ export default function ReviewerPage() {
             <FilterButton label="All" active={filterStatus === 'all'} onClick={() => setFilterStatus('all')} />
             <FilterButton label="Failed" active={filterStatus === 'failed'} onClick={() => setFilterStatus('failed')} />
             <FilterButton label="Passing" active={filterStatus === 'pass'} onClick={() => setFilterStatus('pass')} />
+            {hasComparison && (
+              <>
+                <FilterButton label="Regressions" active={filterStatus === 'regression'} onClick={() => setFilterStatus('regression')} />
+                <FilterButton label="Improved" active={filterStatus === 'improved'} onClick={() => setFilterStatus('improved')} />
+              </>
+            )}
             <FilterButton label="Unconfigured" active={filterStatus === 'unconfigured'} onClick={() => setFilterStatus('unconfigured')} />
             <select
               value={filterFlow}
@@ -595,13 +1016,13 @@ export default function ReviewerPage() {
               }}
             >
               <option value="all">All flows</option>
-              {data.flows.map(f => <option key={f} value={f}>{f}</option>)}
+              {currentData.flows.map(f => <option key={f} value={f}>{f}</option>)}
             </select>
           </div>
         </div>
 
         {/* Regression alert */}
-        {data.regression?.has_unexpected_regressions && (
+        {currentData.regression?.has_unexpected_regressions && (
           <div style={{
             marginTop: 8,
             padding: '6px 12px',
@@ -612,7 +1033,7 @@ export default function ReviewerPage() {
             color: '#991b1b',
             fontWeight: 500,
           }}>
-            {data.regression.regressions.filter((r: any) => !r.is_expected_drift).length} unexpected regression(s) detected vs baseline {data.regression.baseline_run_id}
+            {currentData.regression.regressions.filter((r: any) => !r.is_expected_drift).length} unexpected regression(s) detected vs baseline {currentData.regression.baseline_run_id}
           </div>
         )}
       </header>
@@ -621,7 +1042,7 @@ export default function ReviewerPage() {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* Screen list */}
         <div style={{
-          width: 340,
+          width: 380,
           flexShrink: 0,
           borderRight: '1px solid #e5e7eb',
           overflow: 'auto',
@@ -641,6 +1062,8 @@ export default function ReviewerPage() {
               screen={s}
               isSelected={selectedId === s.screen_id}
               onClick={() => setSelectedId(s.screen_id)}
+              regressionLabel={comparisons.get(s.screen_id)?.label}
+              sparklineValues={sparklines.get(s.screen_id)}
             />
           ))}
           {filteredScreens.length === 0 && (
@@ -653,7 +1076,11 @@ export default function ReviewerPage() {
         {/* Inspector */}
         <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
           {selected ? (
-            <Inspector screen={selected} runId={run?.run_id} />
+            <Inspector
+              screen={selected}
+              runId={run?.run_id}
+              comparison={comparisons.get(selected.screen_id)}
+            />
           ) : (
             <div style={{
               display: 'flex',
