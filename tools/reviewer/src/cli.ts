@@ -8,9 +8,10 @@ import { buildManifest, saveManifest } from './manifest.js';
 import { diffAllScreens, buildDiffManifest, saveDiffManifest } from './diff-engine.js';
 import { generateReport, saveReport } from './report-html.js';
 import { generateRunId, isoNow, getGitCommit, getGitBranch } from './utils.js';
-import { RUNS_STORAGE } from './config.js';
+import { RUNS_STORAGE, STORAGE_DIR } from './config.js';
 import { findLatestManifest, loadManifest, detectRegressions, saveRegressionReport } from './regression.js';
 import { runPRCommentCLI } from './pr-comment.js';
+import { embedAllFigmaFrames, embedRuntimeScreen, EMBEDDINGS_DIR } from './visual-embedding.js';
 
 // ── Shared options ───────────────────────────────────────
 
@@ -290,6 +291,22 @@ const fullCmd = new Command('full')
     const captureManifestPath = saveManifest(captureManifest);
     printCaptureSummary(figmaResults, runtimeResults);
 
+    // ── Phase 2b: Visual Embeddings ──
+    console.log('\n--- Phase 2b: Visual Embeddings ---');
+    const embFigma = embedAllFigmaFrames();
+    console.log(`  Figma embeddings: ${embFigma.computed} computed, ${embFigma.cached} cached`);
+    let embRuntime = 0;
+    const runtimeDir = path.join(STORAGE_DIR, 'runtime');
+    for (const r of runtimeResults) {
+      if (r.status === 'success') {
+        const pngPath = path.join(runtimeDir, r.screen_id, 'runtime.png');
+        if (fs.existsSync(pngPath)) {
+          try { embedRuntimeScreen(r.screen_id, pngPath); embRuntime++; } catch { /* skip */ }
+        }
+      }
+    }
+    console.log(`  Runtime embeddings: ${embRuntime} computed`);
+
     console.log('\n--- Phase 3: Visual Diff ---');
     const diffResults = diffAllScreens(screens, runId);
 
@@ -399,6 +416,55 @@ program
   .action((opts: { run: string; output?: string; artifactUrl?: string }) => {
     runPRCommentCLI(opts.run, opts.output, opts.artifactUrl);
   });
+
+// reviewer embed-figma — compute visual embeddings for Figma frame PNGs
+program
+  .command('embed-figma')
+  .description('Compute visual embeddings for all Figma frame screenshots')
+  .option('--force', 'Recompute all embeddings (ignore cache)', false)
+  .action((opts: { force?: boolean }) => {
+    console.log('\n--- Visual Embedding: Figma Frames ---\n');
+    const result = embedAllFigmaFrames(opts.force);
+    console.log(`Total screens:  ${result.total}`);
+    console.log(`Computed:       ${result.computed}`);
+    console.log(`Cached:         ${result.cached}`);
+    console.log(`Failed:         ${result.failed}`);
+    console.log(`Embeddings dim: ${result.store.entries[0]?.embedding.length || 0}`);
+    console.log(`\nStored: ${EMBEDDINGS_DIR}/figma.json`);
+  });
+
+// reviewer embed-runtime — compute visual embeddings for runtime screenshots
+program
+  .command('embed-runtime')
+  .description('Compute visual embeddings for runtime screenshots')
+  .action(async (opts: FilterOpts) => {
+    const { screens, coverage } = getFilteredScreens(opts);
+    console.log('');
+    printCoverage(coverage, screens.length);
+    console.log('\n--- Visual Embedding: Runtime Screenshots ---\n');
+
+    const runtimeDir = path.join(STORAGE_DIR, 'runtime');
+    let computed = 0, skipped = 0;
+
+    for (const screen of screens) {
+      const pngPath = path.join(runtimeDir, screen.screen_id, 'runtime.png');
+      if (!fs.existsSync(pngPath)) {
+        skipped++;
+        continue;
+      }
+      try {
+        embedRuntimeScreen(screen.screen_id, pngPath);
+        computed++;
+        console.log(`  [ok] ${screen.screen_id}`);
+      } catch (err) {
+        console.error(`  [fail] ${screen.screen_id}: ${(err as Error).message}`);
+      }
+    }
+
+    console.log(`\nComputed: ${computed}, Skipped (no PNG): ${skipped}`);
+    console.log(`Stored: ${EMBEDDINGS_DIR}/runtime/`);
+  });
+addFilterOptions(program.commands[program.commands.length - 1] as Command);
 
 // reviewer list — utility to show registry contents (always shows all)
 program

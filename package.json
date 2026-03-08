@@ -12,7 +12,9 @@
     "reviewer:list": "pnpm -C tools/reviewer cli list",
     "reviewer:full": "pnpm -C tools/reviewer cli full",
     "reviewer:diff": "pnpm -C tools/reviewer cli diff",
-    "reviewer:regress": "pnpm -C tools/reviewer cli regress"
+    "reviewer:regress": "pnpm -C tools/reviewer cli regress",
+    "reviewer:embed-figma": "pnpm -C tools/reviewer embed-figma",
+    "reviewer:embed-runtime": "pnpm -C tools/reviewer cli embed-runtime"
   },
   "devDependencies": {
     "turbo": "^2.3.0"

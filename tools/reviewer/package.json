@@ -7,7 +7,9 @@
     "figma": "tsx src/cli.ts figma",
     "runtime": "tsx src/cli.ts runtime",
     "run": "tsx src/cli.ts run",
-    "cli": "tsx src/cli.ts"
+    "cli": "tsx src/cli.ts",
+    "embed-figma": "tsx src/cli.ts embed-figma",
+    "embed-runtime": "tsx src/cli.ts embed-runtime"
   },
   "dependencies": {
     "commander": "^12.1.0",

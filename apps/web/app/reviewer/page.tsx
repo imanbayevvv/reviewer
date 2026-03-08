@@ -106,8 +106,9 @@ interface FigmaCandidate {
   width: number;
   height: number;
   score: number;
-  rank: 'recommended' | 'similar' | 'other';
+  rank: 'recommended' | 'similar' | 'other' | 'visual';
   already_mapped: boolean;
+  visual_score?: number;
 }
 
 interface MappingSaveResult {
@@ -1349,7 +1350,8 @@ function MappingAssistant({
     }
   };
 
-  const recommended = candidates.filter(c => c.rank === 'recommended');
+  const visual = candidates.filter(c => c.rank === 'visual' || (c.visual_score != null && c.visual_score >= 0.7));
+  const recommended = candidates.filter(c => c.rank === 'recommended' && !(c.visual_score != null && c.visual_score >= 0.7));
   const similar = candidates.filter(c => c.rank === 'similar');
   const other = candidates.filter(c => c.rank === 'other');
 
@@ -1479,6 +1481,16 @@ function MappingAssistant({
         </div>
       ) : (
         <>
+          {visual.length > 0 && (
+            <CandidateGroup
+              title="Visual Matches"
+              color="#7c3aed"
+              candidates={visual}
+              onSelect={handleSave}
+              saving={saving}
+              showVisualScore
+            />
+          )}
           {recommended.length > 0 && (
             <CandidateGroup
               title="Recommended"
@@ -1525,6 +1537,7 @@ function CandidateGroup({
   onSelect,
   saving,
   defaultCollapsed = false,
+  showVisualScore = false,
 }: {
   title: string;
   color: string;
@@ -1532,6 +1545,7 @@ function CandidateGroup({
   onSelect: (nodeId: string) => void;
   saving: boolean;
   defaultCollapsed?: boolean;
+  showVisualScore?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
@@ -1551,7 +1565,7 @@ function CandidateGroup({
       {!collapsed && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
           {candidates.map(c => (
-            <CandidateRow key={c.node_id} candidate={c} onSelect={onSelect} saving={saving} />
+            <CandidateRow key={c.node_id} candidate={c} onSelect={onSelect} saving={saving} showVisualScore={showVisualScore} />
           ))}
         </div>
       )}
@@ -1563,10 +1577,12 @@ function CandidateRow({
   candidate,
   onSelect,
   saving,
+  showVisualScore = false,
 }: {
   candidate: FigmaCandidate;
   onSelect: (nodeId: string) => void;
   saving: boolean;
+  showVisualScore?: boolean;
 }) {
   const c = candidate;
   return (
@@ -1574,8 +1590,8 @@ function CandidateRow({
       style={{
         display: 'flex', alignItems: 'center', gap: 10,
         padding: '8px 12px', borderRadius: 6,
-        border: '1px solid #e5e7eb',
-        background: c.already_mapped ? '#fafafa' : '#fff',
+        border: `1px solid ${showVisualScore && c.visual_score != null && c.visual_score >= 0.7 ? '#c4b5fd' : '#e5e7eb'}`,
+        background: c.already_mapped ? '#fafafa' : showVisualScore ? '#faf5ff' : '#fff',
         fontSize: 12,
         opacity: c.already_mapped ? 0.6 : 1,
       }}
@@ -1600,18 +1616,28 @@ function CandidateRow({
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{
-          fontSize: 10, color: '#9ca3af', fontFamily: 'monospace',
-        }}>
-          {c.score.toFixed(0)}pt
-        </span>
+        {showVisualScore && c.visual_score != null ? (
+          <span style={{
+            fontSize: 10, fontFamily: 'monospace',
+            color: c.visual_score >= 0.8 ? '#7c3aed' : c.visual_score >= 0.7 ? '#a78bfa' : '#9ca3af',
+            fontWeight: c.visual_score >= 0.8 ? 700 : 400,
+          }}>
+            {(c.visual_score * 100).toFixed(0)}% sim
+          </span>
+        ) : (
+          <span style={{
+            fontSize: 10, color: '#9ca3af', fontFamily: 'monospace',
+          }}>
+            {c.score.toFixed(0)}pt
+          </span>
+        )}
         <button
           onClick={() => onSelect(c.node_id)}
           disabled={saving}
           style={{
             padding: '3px 10px', fontSize: 11, fontWeight: 600,
             border: 'none', borderRadius: 4,
-            background: c.already_mapped ? '#e5e7eb' : '#2563eb',
+            background: c.already_mapped ? '#e5e7eb' : showVisualScore ? '#7c3aed' : '#2563eb',
             color: c.already_mapped ? '#6b7280' : '#fff',
             cursor: saving ? 'default' : 'pointer',
             opacity: saving ? 0.5 : 1,
