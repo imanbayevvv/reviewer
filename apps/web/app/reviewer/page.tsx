@@ -93,6 +93,57 @@ interface ScreenComparison {
   delta: number | null;
 }
 
+type ViewMode = 'list' | 'graph';
+
+// ── Flow graph types ─────────────────────────────────────
+
+interface FlowNode {
+  id: string;
+  screen_id: string;
+  route: string;
+  step: number;
+  variant: string;
+  flow_id: string;
+  is_external: boolean;
+}
+
+interface FlowEdge {
+  from: string;
+  to: string;
+  trigger: string;
+  type: 'next' | 'alternate' | 'error' | 'data_variant';
+  notes?: string;
+}
+
+interface FlowGraph {
+  flow_id: string;
+  title: string;
+  entry_route: string;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+}
+
+// ── Graph layout constants ───────────────────────────────
+
+const NODE_W = 186;
+const NODE_H = 76;
+const COL_GAP = 64;
+const ROW_GAP = 28;
+const PAD = 32;
+
+interface LayoutNode {
+  node: FlowNode;
+  x: number;
+  y: number;
+}
+
+interface LayoutEdge {
+  edge: FlowEdge;
+  fromPos: { x: number; y: number };
+  toPos: { x: number; y: number };
+  isSelfLoop: boolean;
+}
+
 // ── Helpers ──────────────────────────────────────────────
 
 function getEffectiveStatus(s: ScreenData): string {
@@ -122,6 +173,17 @@ function statusBg(status: string): string {
     case 'unconfigured': return '#fafafa';
     case 'disabled': return '#f5f5f5';
     default: return '#ffffff';
+  }
+}
+
+function nodeStroke(status: string): string {
+  switch (status) {
+    case 'pass': return '#86efac';
+    case 'fail': return '#fca5a5';
+    case 'error': return '#fdba74';
+    case 'unconfigured': return '#d4d4d8';
+    case 'disabled': return '#e5e7eb';
+    default: return '#e5e7eb';
   }
 }
 
@@ -172,21 +234,146 @@ function classifyScreen(
   const curStatus = currentScreen.diff_status;
   const baseStatus = baselineScreen.diff_status;
 
-  // PASS -> FAIL = REGRESSION
   if (baseStatus === 'pass' && curStatus === 'fail') return 'REGRESSION';
-  // FAIL -> PASS = IMPROVED
   if (baseStatus === 'fail' && curStatus === 'pass') return 'IMPROVED';
 
   const curMismatch = currentScreen.mismatch_percent ?? 0;
   const baseMismatch = baselineScreen.mismatch_percent ?? 0;
   const delta = curMismatch - baseMismatch;
 
-  // Mismatch increase > 0.5pp = REGRESSION
   if (delta > 0.5) return 'REGRESSION';
-  // Mismatch decrease > 0.5pp = IMPROVED
   if (delta < -0.5) return 'IMPROVED';
 
   return 'UNCHANGED';
+}
+
+function edgeStroke(type: string): string {
+  switch (type) {
+    case 'next': return '#6b7280';
+    case 'alternate': return '#a1a1aa';
+    case 'error': return '#ef4444';
+    case 'data_variant': return '#8b5cf6';
+    default: return '#d4d4d8';
+  }
+}
+
+function edgeDash(type: string): string {
+  switch (type) {
+    case 'next': return '';
+    case 'alternate': return '6 3';
+    case 'error': return '3 3';
+    case 'data_variant': return '4 2';
+    default: return '4 2';
+  }
+}
+
+// ── Graph layout engine ──────────────────────────────────
+
+function computeLayout(graph: FlowGraph): { nodes: LayoutNode[]; edges: LayoutEdge[]; width: number; height: number } {
+  const { nodes, edges } = graph;
+  if (nodes.length === 0) return { nodes: [], edges: [], width: 0, height: 0 };
+
+  // Assign columns using BFS from nodes with no incoming "next" edges.
+  // This respects the DAG structure rather than relying solely on step numbers.
+  const incomingNext = new Set<string>();
+  const adjNext = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.type === 'next') {
+      incomingNext.add(e.to);
+      const list = adjNext.get(e.from) || [];
+      list.push(e.to);
+      adjNext.set(e.from, list);
+    }
+  }
+
+  // Entry nodes: no incoming "next" edges
+  const entryIds = nodes.filter(n => !incomingNext.has(n.id)).map(n => n.id);
+  if (entryIds.length === 0) entryIds.push(nodes[0].id);
+
+  const colMap = new Map<string, number>();
+  const queue: string[] = [...entryIds];
+  for (const id of entryIds) colMap.set(id, 0);
+
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    const curCol = colMap.get(cur)!;
+    const nexts = adjNext.get(cur) || [];
+    for (const nxt of nexts) {
+      const existing = colMap.get(nxt);
+      if (existing === undefined || existing < curCol + 1) {
+        colMap.set(nxt, curCol + 1);
+        queue.push(nxt);
+      }
+    }
+  }
+
+  // Assign any unreached nodes to max_col + 1
+  let maxCol = 0;
+  colMap.forEach(c => { if (c > maxCol) maxCol = c; });
+  for (const n of nodes) {
+    if (!colMap.has(n.id)) colMap.set(n.id, maxCol + 1);
+  }
+
+  // Group nodes by column
+  const columns = new Map<number, FlowNode[]>();
+  for (const n of nodes) {
+    const col = colMap.get(n.id)!;
+    const list = columns.get(col) || [];
+    list.push(n);
+    columns.set(col, list);
+  }
+
+  // Sort columns
+  const sortedCols = [...columns.keys()].sort((a, b) => a - b);
+
+  // Compute positions
+  const layoutNodes: LayoutNode[] = [];
+  const posMap = new Map<string, { x: number; y: number }>();
+
+  // Find max row count for vertical centering
+  let maxRows = 0;
+  for (const col of sortedCols) {
+    const count = columns.get(col)!.length;
+    if (count > maxRows) maxRows = count;
+  }
+
+  for (let ci = 0; ci < sortedCols.length; ci++) {
+    const col = sortedCols[ci];
+    const colNodes = columns.get(col)!;
+    const x = PAD + ci * (NODE_W + COL_GAP);
+
+    // Center vertically relative to the tallest column
+    const totalH = colNodes.length * NODE_H + (colNodes.length - 1) * ROW_GAP;
+    const maxTotalH = maxRows * NODE_H + (maxRows - 1) * ROW_GAP;
+    const yOffset = PAD + (maxTotalH - totalH) / 2;
+
+    for (let ri = 0; ri < colNodes.length; ri++) {
+      const node = colNodes[ri];
+      const y = yOffset + ri * (NODE_H + ROW_GAP);
+      layoutNodes.push({ node, x, y });
+      posMap.set(node.id, { x, y });
+    }
+  }
+
+  // Compute edges
+  const layoutEdges: LayoutEdge[] = [];
+  for (const edge of edges) {
+    const fromPos = posMap.get(edge.from);
+    const toPos = posMap.get(edge.to);
+    if (!fromPos || !toPos) continue;
+
+    layoutEdges.push({
+      edge,
+      fromPos,
+      toPos,
+      isSelfLoop: edge.from === edge.to,
+    });
+  }
+
+  const width = PAD * 2 + sortedCols.length * NODE_W + (sortedCols.length - 1) * COL_GAP;
+  const height = PAD * 2 + maxRows * NODE_H + (maxRows - 1) * ROW_GAP;
+
+  return { nodes: layoutNodes, edges: layoutEdges, width, height };
 }
 
 // ── Components ───────────────────────────────────────────
@@ -281,7 +468,6 @@ function Sparkline({ values, width = 80, height = 24 }: { values: (number | null
         strokeLinejoin="round"
         strokeLinecap="round"
       />
-      {/* Last point dot */}
       <circle
         cx={(nums.length - 1) / (nums.length - 1) * width}
         cy={height - 2 - ((lastVal - min) / range) * (height - 4)}
@@ -418,6 +604,343 @@ const summaryLinkStyle: React.CSSProperties = {
   textUnderlineOffset: '2px',
 };
 
+// ── Flow Graph SVG ───────────────────────────────────────
+
+function FlowGraphSVG({
+  graph,
+  screenMap,
+  comparisons,
+  selectedId,
+  onSelect,
+  filterFn,
+}: {
+  graph: FlowGraph;
+  screenMap: Map<string, ScreenData>;
+  comparisons: Map<string, ScreenComparison>;
+  selectedId: string | null;
+  onSelect: (screenId: string) => void;
+  filterFn: (screenId: string) => boolean;
+}) {
+  const layout = useMemo(() => computeLayout(graph), [graph]);
+  if (layout.nodes.length === 0) return null;
+
+  const svgW = Math.max(layout.width, 300);
+  const svgH = Math.max(layout.height, 120);
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{
+        fontSize: 14,
+        fontWeight: 700,
+        color: '#374151',
+        marginBottom: 8,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+      }}>
+        {graph.title}
+        <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 400 }}>{graph.flow_id}</span>
+      </div>
+      <div style={{ overflow: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, background: '#fff' }}>
+        <svg
+          width={svgW}
+          height={svgH}
+          viewBox={`0 0 ${svgW} ${svgH}`}
+          style={{ display: 'block' }}
+        >
+          <defs>
+            <marker
+              id={`arrow-next-${graph.flow_id}`}
+              viewBox="0 0 10 6"
+              refX="10"
+              refY="3"
+              markerWidth="8"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 3 L 0 6 z" fill="#6b7280" />
+            </marker>
+            <marker
+              id={`arrow-alt-${graph.flow_id}`}
+              viewBox="0 0 10 6"
+              refX="10"
+              refY="3"
+              markerWidth="8"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 3 L 0 6 z" fill="#a1a1aa" />
+            </marker>
+            <marker
+              id={`arrow-err-${graph.flow_id}`}
+              viewBox="0 0 10 6"
+              refX="10"
+              refY="3"
+              markerWidth="8"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 3 L 0 6 z" fill="#ef4444" />
+            </marker>
+          </defs>
+
+          {/* Edges */}
+          {layout.edges.map((le, i) => {
+            const { fromPos, toPos, edge, isSelfLoop } = le;
+            const markerEnd = edge.type === 'error'
+              ? `url(#arrow-err-${graph.flow_id})`
+              : edge.type === 'alternate' || edge.type === 'data_variant'
+                ? `url(#arrow-alt-${graph.flow_id})`
+                : `url(#arrow-next-${graph.flow_id})`;
+
+            if (isSelfLoop) {
+              // Draw a loop arc above the node
+              const cx = fromPos.x + NODE_W / 2;
+              const cy = fromPos.y;
+              return (
+                <path
+                  key={`edge-${i}`}
+                  d={`M ${cx - 12} ${cy} C ${cx - 12} ${cy - 36}, ${cx + 12} ${cy - 36}, ${cx + 12} ${cy}`}
+                  fill="none"
+                  stroke={edgeStroke(edge.type)}
+                  strokeWidth="1.5"
+                  strokeDasharray={edgeDash(edge.type)}
+                  markerEnd={markerEnd}
+                />
+              );
+            }
+
+            // Is it a back-edge (going left)?
+            const isBack = toPos.x < fromPos.x;
+
+            if (isBack) {
+              // Route the edge below the nodes
+              const fromRight = fromPos.x;
+              const fromMid = fromPos.y + NODE_H / 2;
+              const toLeft = toPos.x + NODE_W;
+              const toMid = toPos.y + NODE_H / 2;
+              const belowY = Math.max(fromPos.y, toPos.y) + NODE_H + 20;
+
+              return (
+                <path
+                  key={`edge-${i}`}
+                  d={`M ${fromRight} ${fromMid} C ${fromRight - 20} ${belowY}, ${toLeft + 20} ${belowY}, ${toLeft} ${toMid}`}
+                  fill="none"
+                  stroke={edgeStroke(edge.type)}
+                  strokeWidth="1.5"
+                  strokeDasharray={edgeDash(edge.type)}
+                  markerEnd={markerEnd}
+                />
+              );
+            }
+
+            // Forward edge: right side of from -> left side of to
+            const x1 = fromPos.x + NODE_W;
+            const y1 = fromPos.y + NODE_H / 2;
+            const x2 = toPos.x;
+            const y2 = toPos.y + NODE_H / 2;
+            const cpOffset = Math.min(Math.abs(x2 - x1) * 0.4, 60);
+
+            return (
+              <path
+                key={`edge-${i}`}
+                d={`M ${x1} ${y1} C ${x1 + cpOffset} ${y1}, ${x2 - cpOffset} ${y2}, ${x2} ${y2}`}
+                fill="none"
+                stroke={edgeStroke(edge.type)}
+                strokeWidth="1.5"
+                strokeDasharray={edgeDash(edge.type)}
+                markerEnd={markerEnd}
+              />
+            );
+          })}
+
+          {/* Nodes */}
+          {layout.nodes.map(ln => {
+            const { node, x, y } = ln;
+            const screen = screenMap.get(node.screen_id);
+            const status = screen ? getEffectiveStatus(screen) : 'no_run';
+            const isSelected = selectedId === node.screen_id;
+            const dimmed = !filterFn(node.screen_id);
+            const comparison = comparisons.get(node.screen_id);
+            const pct = screen?.mismatch_percent;
+
+            return (
+              <g
+                key={node.id}
+                onClick={() => onSelect(node.screen_id)}
+                style={{ cursor: 'pointer' }}
+                opacity={dimmed ? 0.35 : 1}
+              >
+                {/* Node background */}
+                <rect
+                  x={x}
+                  y={y}
+                  width={NODE_W}
+                  height={NODE_H}
+                  rx={8}
+                  fill={isSelected ? '#eff6ff' : statusBg(status)}
+                  stroke={isSelected ? '#2563eb' : nodeStroke(status)}
+                  strokeWidth={isSelected ? 2 : 1.5}
+                />
+
+                {/* Status color bar (left edge) */}
+                <rect
+                  x={x}
+                  y={y}
+                  width={4}
+                  height={NODE_H}
+                  rx={2}
+                  fill={statusColor(status)}
+                />
+
+                {/* Node ID label */}
+                <text
+                  x={x + 12}
+                  y={y + 18}
+                  fontSize={11}
+                  fontWeight={600}
+                  fill="#111"
+                  style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}
+                >
+                  {node.id}
+                </text>
+
+                {/* Screen ID (smaller) */}
+                <text
+                  x={x + 12}
+                  y={y + 32}
+                  fontSize={9}
+                  fill="#9ca3af"
+                  style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}
+                >
+                  {node.screen_id.length > 28 ? node.screen_id.slice(0, 26) + '..' : node.screen_id}
+                </text>
+
+                {/* Status badge */}
+                <rect
+                  x={x + 12}
+                  y={y + 40}
+                  width={statusLabel(status).length * 6.2 + 10}
+                  height={16}
+                  rx={3}
+                  fill={statusColor(status)}
+                />
+                <text
+                  x={x + 17}
+                  y={y + 52}
+                  fontSize={9}
+                  fontWeight={600}
+                  fill="#fff"
+                  style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', textTransform: 'uppercase' as const, letterSpacing: '0.02em' }}
+                >
+                  {statusLabel(status)}
+                </text>
+
+                {/* Mismatch % */}
+                {pct !== null && pct !== undefined && (
+                  <text
+                    x={x + NODE_W - 10}
+                    y={y + 52}
+                    fontSize={10}
+                    fill="#6b7280"
+                    textAnchor="end"
+                    style={{ fontFamily: 'monospace' }}
+                  >
+                    {pct.toFixed(2)}%
+                  </text>
+                )}
+
+                {/* Regression badge (top-right corner) */}
+                {comparison && comparison.label !== 'UNCHANGED' && (
+                  <>
+                    <rect
+                      x={x + NODE_W - regBadgeWidth(comparison.label) - 6}
+                      y={y + 6}
+                      width={regBadgeWidth(comparison.label)}
+                      height={14}
+                      rx={3}
+                      fill={regressionBadgeColor(comparison.label).bg}
+                    />
+                    <text
+                      x={x + NODE_W - 10}
+                      y={y + 16}
+                      fontSize={8}
+                      fontWeight={700}
+                      fill={regressionBadgeColor(comparison.label).fg}
+                      textAnchor="end"
+                      style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', textTransform: 'uppercase' as const, letterSpacing: '0.03em' }}
+                    >
+                      {comparison.label.replace('_', ' ')}
+                    </text>
+                  </>
+                )}
+
+                {/* External node indicator */}
+                {node.is_external && (
+                  <text
+                    x={x + NODE_W - 10}
+                    y={y + 32}
+                    fontSize={8}
+                    fill="#a1a1aa"
+                    textAnchor="end"
+                    style={{ fontStyle: 'italic' }}
+                  >
+                    ext
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function statusLabel(status: string): string {
+  return status === 'no_run' ? 'NO RUN' : status;
+}
+
+function regBadgeWidth(label: RegressionLabel): number {
+  switch (label) {
+    case 'REGRESSION': return 62;
+    case 'IMPROVED': return 52;
+    case 'NEW_SCREEN': return 62;
+    default: return 0;
+  }
+}
+
+// ── Edge legend ──────────────────────────────────────────
+
+function EdgeLegend() {
+  const items: { type: string; label: string; color: string; dash: string }[] = [
+    { type: 'next', label: 'Next (primary)', color: '#6b7280', dash: '' },
+    { type: 'alternate', label: 'Alternate', color: '#a1a1aa', dash: '6 3' },
+    { type: 'error', label: 'Error', color: '#ef4444', dash: '3 3' },
+    { type: 'data_variant', label: 'Data variant', color: '#8b5cf6', dash: '4 2' },
+  ];
+
+  return (
+    <div style={{ display: 'flex', gap: 16, fontSize: 11, color: '#6b7280', alignItems: 'center', padding: '4px 0' }}>
+      {items.map(item => (
+        <div key={item.type} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <svg width="24" height="8">
+            <line
+              x1="0" y1="4" x2="24" y2="4"
+              stroke={item.color}
+              strokeWidth="1.5"
+              strokeDasharray={item.dash}
+            />
+          </svg>
+          <span>{item.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Screen list card ─────────────────────────────────────
+
 function ScreenCard({
   screen,
   isSelected,
@@ -488,6 +1011,8 @@ function ScreenCard({
     </button>
   );
 }
+
+// ── Inspector (unchanged) ────────────────────────────────
 
 function ImagePanel({
   screen,
@@ -608,7 +1133,6 @@ function Inspector({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Header */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <StatusBadge status={status} />
@@ -621,7 +1145,6 @@ function Inspector({
         </div>
       </div>
 
-      {/* Comparison delta */}
       {comparison && comparison.delta !== null && comparison.label !== 'UNCHANGED' && (
         <div style={{
           padding: '6px 12px',
@@ -641,7 +1164,6 @@ function Inspector({
         </div>
       )}
 
-      {/* Metrics bar */}
       {screen.mismatch_percent !== null && (
         <div style={{
           display: 'grid',
@@ -656,7 +1178,6 @@ function Inspector({
         </div>
       )}
 
-      {/* Thresholds */}
       {screen.threshold_eval && (
         <div style={{ fontSize: 12, padding: '8px 12px', background: '#f9fafb', borderRadius: 6 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Thresholds</div>
@@ -673,7 +1194,6 @@ function Inspector({
         </div>
       )}
 
-      {/* Failure reasons */}
       {screen.failure_reasons.length > 0 && (
         <div style={{ padding: '8px 12px', background: '#fef2f2', borderRadius: 6, fontSize: 12, color: '#991b1b' }}>
           <div style={{ fontWeight: 600, marginBottom: 2 }}>Failure reasons</div>
@@ -681,7 +1201,6 @@ function Inspector({
         </div>
       )}
 
-      {/* Drift / Notes */}
       {(screen.drift_classification === 'real_drift' || screen.notes || screen.unconfigured_reason) && (
         <div style={{ padding: '8px 12px', background: screen.drift_classification === 'real_drift' ? '#f5f3ff' : '#f9fafb', borderRadius: 6, fontSize: 12 }}>
           {screen.drift_classification === 'real_drift' && (
@@ -696,7 +1215,6 @@ function Inspector({
         </div>
       )}
 
-      {/* Masks */}
       {screen.masks_applied.length > 0 && (
         <div style={{ fontSize: 12, padding: '8px 12px', background: '#f9fafb', borderRadius: 6 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Masks applied</div>
@@ -710,21 +1228,18 @@ function Inspector({
         </div>
       )}
 
-      {/* Warnings */}
       {screen.warnings.length > 0 && (
         <div style={{ padding: '8px 12px', background: '#fffbeb', borderRadius: 6, fontSize: 12, color: '#92400e' }}>
           {screen.warnings.map((w, i) => <div key={i}>{w}</div>)}
         </div>
       )}
 
-      {/* Tags */}
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
         {screen.tags.map(t => (
           <span key={t} style={{ padding: '1px 8px', background: '#f3f4f6', borderRadius: 9999, fontSize: 11, color: '#6b7280' }}>{t}</span>
         ))}
       </div>
 
-      {/* Images */}
       <ImagePanel screen={screen} runId={runId} />
     </div>
   );
@@ -777,7 +1292,7 @@ function useRunData(runId: string | null) {
     if (!runId) return;
     setLoading(true);
     setError(null);
-    const url = runId ? `/api/reviewer/data?run=${encodeURIComponent(runId)}` : '/api/reviewer/data';
+    const url = `/api/reviewer/data?run=${encodeURIComponent(runId)}`;
     fetch(url)
       .then(r => r.json())
       .then(d => {
@@ -791,7 +1306,18 @@ function useRunData(runId: string | null) {
   return { data, error, loading };
 }
 
-// ── Sparkline data: collect mismatch values across runs ──
+function useFlowGraphs() {
+  const [flows, setFlows] = useState<FlowGraph[]>([]);
+
+  useEffect(() => {
+    fetch('/api/reviewer/flows')
+      .then(r => r.json())
+      .then(d => setFlows(d.flows || []))
+      .catch(() => {});
+  }, []);
+
+  return flows;
+}
 
 function useSparklineData(runs: RunEntry[]) {
   const [sparklines, setSparklines] = useState<Map<string, (number | null)[]>>(new Map());
@@ -799,7 +1325,6 @@ function useSparklineData(runs: RunEntry[]) {
   useEffect(() => {
     if (runs.length < 2) return;
 
-    // Take last 10 runs (chronological order, oldest first)
     const recentRuns = runs.slice(0, 10).reverse();
 
     Promise.all(
@@ -811,7 +1336,6 @@ function useSparklineData(runs: RunEntry[]) {
       )
     ).then(results => {
       const map = new Map<string, (number | null)[]>();
-      // Collect all screen IDs
       const allScreenIds = new Set<string>();
       results.forEach(r => r.screens.forEach(s => allScreenIds.add(s.screen_id)));
 
@@ -834,8 +1358,8 @@ function useSparklineData(runs: RunEntry[]) {
 
 export default function ReviewerPage() {
   const { runs, loading: runsLoading } = useRuns();
+  const flowGraphs = useFlowGraphs();
 
-  // Default: current = latest, baseline = previous
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [baselineRunId, setBaselineRunId] = useState<string | null>(null);
 
@@ -853,8 +1377,16 @@ export default function ReviewerPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [filterFlow, setFilterFlow] = useState<string>('all');
+  const [viewMode, setViewMode] = useState<ViewMode>('graph');
 
   const sparklines = useSparklineData(runs);
+
+  // Screen lookup map
+  const screenMap = useMemo(() => {
+    const map = new Map<string, ScreenData>();
+    currentData?.screens.forEach(s => map.set(s.screen_id, s));
+    return map;
+  }, [currentData]);
 
   // Build comparison map
   const comparisons = useMemo(() => {
@@ -879,7 +1411,10 @@ export default function ReviewerPage() {
     return map;
   }, [currentData, baselineData, currentRunId, baselineRunId]);
 
-  const filteredScreens = currentData?.screens.filter(s => {
+  // Filter function
+  const filterFn = useCallback((screenId: string): boolean => {
+    const s = screenMap.get(screenId);
+    if (!s) return false;
     if (filterFlow !== 'all' && s.flow_id !== filterFlow) return false;
     if (filterStatus === 'failed') return s.diff_status === 'fail' || s.diff_status === 'error';
     if (filterStatus === 'unconfigured') return s.readiness === 'unconfigured';
@@ -887,7 +1422,15 @@ export default function ReviewerPage() {
     if (filterStatus === 'regression') return comparisons.get(s.screen_id)?.label === 'REGRESSION';
     if (filterStatus === 'improved') return comparisons.get(s.screen_id)?.label === 'IMPROVED';
     return true;
-  }) ?? [];
+  }, [screenMap, filterFlow, filterStatus, comparisons]);
+
+  const filteredScreens = currentData?.screens.filter(s => filterFn(s.screen_id)) ?? [];
+
+  // Filter flows for graph view
+  const visibleFlows = useMemo(() => {
+    if (filterFlow === 'all') return flowGraphs;
+    return flowGraphs.filter(f => f.flow_id === filterFlow);
+  }, [flowGraphs, filterFlow]);
 
   const selected = currentData?.screens.find(s => s.screen_id === selectedId) ?? null;
 
@@ -940,15 +1483,51 @@ export default function ReviewerPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ fontWeight: 700, fontSize: 16 }}>FlowCanvas Reviewer</span>
-            <span style={{ fontSize: 11, color: '#9ca3af' }}>v0.2</span>
+            <span style={{ fontSize: 11, color: '#9ca3af' }}>v0.3</span>
           </div>
-          {run && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 12, color: '#6b7280' }}>
-              <span>Branch: <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: 3 }}>{run.git_branch}</code></span>
-              <span>Commit: <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: 3 }}>{run.git_commit}</code></span>
-              <span>{formatTime(run.started_at)}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* View toggle */}
+            <div style={{ display: 'flex', border: '1px solid #e5e7eb', borderRadius: 4, overflow: 'hidden' }}>
+              <button
+                onClick={() => setViewMode('graph')}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: 12,
+                  border: 'none',
+                  background: viewMode === 'graph' ? '#2563eb' : '#fff',
+                  color: viewMode === 'graph' ? '#fff' : '#6b7280',
+                  fontWeight: viewMode === 'graph' ? 600 : 400,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                Graph
+              </button>
+              <button
+                onClick={() => setViewMode('list')}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: 12,
+                  border: 'none',
+                  borderLeft: '1px solid #e5e7eb',
+                  background: viewMode === 'list' ? '#2563eb' : '#fff',
+                  color: viewMode === 'list' ? '#fff' : '#6b7280',
+                  fontWeight: viewMode === 'list' ? 600 : 400,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                List
+              </button>
             </div>
-          )}
+            {run && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 12, color: '#6b7280' }}>
+                <span>Branch: <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: 3 }}>{run.git_branch}</code></span>
+                <span>Commit: <code style={{ background: '#f3f4f6', padding: '1px 4px', borderRadius: 3 }}>{run.git_commit}</code></span>
+                <span>{formatTime(run.started_at)}</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Run selector */}
@@ -1038,43 +1617,70 @@ export default function ReviewerPage() {
         )}
       </header>
 
-      {/* Main content: list + inspector */}
+      {/* Main content */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* Screen list */}
-        <div style={{
-          width: 380,
-          flexShrink: 0,
-          borderRight: '1px solid #e5e7eb',
-          overflow: 'auto',
-          padding: 12,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-          background: '#fff',
-        }}>
-          <div style={{ fontSize: 11, color: '#9ca3af', padding: '0 4px 4px', fontWeight: 500 }}>
-            {filteredScreens.length} screen{filteredScreens.length !== 1 ? 's' : ''}
-            <span style={{ float: 'right', color: '#d4d4d8' }}>j/k to navigate</span>
+        {/* Left panel: graph or list */}
+        {viewMode === 'graph' ? (
+          <div style={{
+            flex: selected ? '0 0 55%' : '1',
+            overflow: 'auto',
+            padding: 20,
+            background: '#fafafa',
+          }}>
+            <EdgeLegend />
+            {visibleFlows.map(flow => (
+              <FlowGraphSVG
+                key={flow.flow_id}
+                graph={flow}
+                screenMap={screenMap}
+                comparisons={comparisons}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                filterFn={filterFn}
+              />
+            ))}
+            {visibleFlows.length === 0 && (
+              <div style={{ padding: 40, textAlign: 'center', color: '#a1a1aa', fontSize: 13 }}>
+                No flows match the selected filter
+              </div>
+            )}
           </div>
-          {filteredScreens.map(s => (
-            <ScreenCard
-              key={s.screen_id}
-              screen={s}
-              isSelected={selectedId === s.screen_id}
-              onClick={() => setSelectedId(s.screen_id)}
-              regressionLabel={comparisons.get(s.screen_id)?.label}
-              sparklineValues={sparklines.get(s.screen_id)}
-            />
-          ))}
-          {filteredScreens.length === 0 && (
-            <div style={{ padding: 20, textAlign: 'center', color: '#a1a1aa', fontSize: 13 }}>
-              No screens match filters
+        ) : (
+          <div style={{
+            width: 380,
+            flexShrink: 0,
+            borderRight: '1px solid #e5e7eb',
+            overflow: 'auto',
+            padding: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            background: '#fff',
+          }}>
+            <div style={{ fontSize: 11, color: '#9ca3af', padding: '0 4px 4px', fontWeight: 500 }}>
+              {filteredScreens.length} screen{filteredScreens.length !== 1 ? 's' : ''}
+              <span style={{ float: 'right', color: '#d4d4d8' }}>j/k to navigate</span>
             </div>
-          )}
-        </div>
+            {filteredScreens.map(s => (
+              <ScreenCard
+                key={s.screen_id}
+                screen={s}
+                isSelected={selectedId === s.screen_id}
+                onClick={() => setSelectedId(s.screen_id)}
+                regressionLabel={comparisons.get(s.screen_id)?.label}
+                sparklineValues={sparklines.get(s.screen_id)}
+              />
+            ))}
+            {filteredScreens.length === 0 && (
+              <div style={{ padding: 20, textAlign: 'center', color: '#a1a1aa', fontSize: 13 }}>
+                No screens match filters
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Inspector */}
-        <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
+        <div style={{ flex: 1, overflow: 'auto', padding: 20, minWidth: 0 }}>
           {selected ? (
             <Inspector
               screen={selected}
@@ -1090,7 +1696,7 @@ export default function ReviewerPage() {
               color: '#a1a1aa',
               fontSize: 14,
             }}>
-              Select a screen to inspect
+              {viewMode === 'graph' ? 'Click a node to inspect' : 'Select a screen to inspect'}
             </div>
           )}
         </div>
