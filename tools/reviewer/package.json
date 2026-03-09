@@ -9,7 +9,9 @@
     "run": "tsx src/cli.ts run",
     "cli": "tsx src/cli.ts",
     "embed-figma": "tsx src/cli.ts embed-figma",
-    "embed-runtime": "tsx src/cli.ts embed-runtime"
+    "embed-runtime": "tsx src/cli.ts embed-runtime",
+    "pr-check": "tsx src/cli.ts pr-check",
+    "pr-check:fail": "tsx src/cli.ts pr-check --fail-on-regression"
   },
   "dependencies": {
     "commander": "^12.1.0",

@@ -13,6 +13,7 @@ import { findLatestManifest, loadManifest, detectRegressions, saveRegressionRepo
 import { runPRCommentCLI } from './pr-comment.js';
 import { embedAllFigmaFrames, embedRuntimeScreen, EMBEDDINGS_DIR } from './visual-embedding.js';
 import { runEvaluation } from './evaluate-mapping.js';
+import { getChangedFiles, getAffectedScreens, logPRImpact } from './pr-impact.js';
 
 // ── Shared options ───────────────────────────────────────
 
@@ -507,5 +508,120 @@ program
       );
     }
   });
+
+// reviewer pr-check — selective run based on changed files in a PR
+const prCheckCmd = new Command('pr-check')
+  .description(
+    'Selective PR visual check: detect changed files, run only affected screens (v0.7)',
+  )
+  .option('--fail-on-regression', 'Exit with code 1 if unexpected regressions found', false)
+  .option('--all', 'Include unconfigured/disabled screens (default: ready-only)', false)
+  .action(async (opts: { failOnRegression?: boolean; all?: boolean }) => {
+    // ── Step 1: Detect changed files ──────────────────────────────────────
+    const changedFiles = getChangedFiles();
+
+    // ── Step 2: Load full registry ────────────────────────────────────────
+    const { screens: allScreens, coverage } = getFilteredScreens({ all: opts.all });
+    console.log('');
+    printCoverage(coverage, allScreens.length);
+
+    // ── Step 3: Determine affected screens via heuristics ─────────────────
+    const impact = getAffectedScreens(changedFiles, allScreens);
+    logPRImpact(impact);
+
+    // ── Step 4: Resolve the screens to actually run ───────────────────────
+    const affectedScreenIdSet = new Set(impact.affectedScreenIds);
+    const screens = allScreens.filter((s) => affectedScreenIdSet.has(s.screen_id));
+
+    if (screens.length === 0) {
+      console.log('\n[pr-check] No screens selected — nothing to run.');
+      return;
+    }
+
+    console.log(`\n[pr-check] Running pipeline for ${screens.length} screen(s)${impact.isFallback ? ' (full fallback)' : ''}...\n`);
+
+    const runId = generateRunId();
+    const startedAt = isoNow();
+
+    // ── Phase 1: Figma Fetch ──
+    console.log('--- Phase 1: Figma Fetch ---');
+    const figmaResults = await fetchAllFigmaScreens(screens, { force: false });
+
+    // ── Phase 2: Runtime Capture ──
+    console.log('\n--- Phase 2: Runtime Capture ---');
+    const runtimeResults = await captureAllScreens(screens);
+
+    const captureManifest = buildManifest({
+      runId,
+      startedAt,
+      mode: 'full',
+      filters: {},
+      screenIds: screens.map((s) => s.screen_id),
+      figmaResults,
+      runtimeResults,
+    });
+    const captureManifestPath = saveManifest(captureManifest);
+    printCaptureSummary(figmaResults, runtimeResults);
+
+    // ── Phase 2b: Visual Embeddings ──
+    console.log('\n--- Phase 2b: Visual Embeddings ---');
+    const embFigma = embedAllFigmaFrames();
+    console.log(`  Figma embeddings: ${embFigma.computed} computed, ${embFigma.cached} cached`);
+    let embRuntime = 0;
+    const runtimeDir = path.join(STORAGE_DIR, 'runtime');
+    for (const r of runtimeResults) {
+      if (r.status === 'success') {
+        const pngPath = path.join(runtimeDir, r.screen_id, 'runtime.png');
+        if (fs.existsSync(pngPath)) {
+          try { embedRuntimeScreen(r.screen_id, pngPath); embRuntime++; } catch { /* skip */ }
+        }
+      }
+    }
+    console.log(`  Runtime embeddings: ${embRuntime} computed`);
+
+    // ── Phase 3: Visual Diff ──
+    console.log('\n--- Phase 3: Visual Diff ---');
+    const diffResults = diffAllScreens(screens, runId);
+
+    const diffManifest = buildDiffManifest(
+      runId,
+      captureManifestPath,
+      isoNow(),
+      diffResults,
+      getGitCommit(),
+      getGitBranch(),
+      coverage,
+    );
+    const diffManifestPath = saveDiffManifest(diffManifest);
+
+    // ── Phase 4: HTML Report ──
+    console.log('\n--- Phase 4: HTML Report ---');
+    const html = generateReport(diffManifest);
+    const reportPath = saveReport(html, runId);
+
+    printDiffSummary(diffManifest);
+    console.log(`\nCapture manifest: ${captureManifestPath}`);
+    console.log(`Diff manifest:    ${diffManifestPath}`);
+    console.log(`HTML report:      ${reportPath}`);
+
+    // ── Phase 5: Regression Detection ──
+    const baseline = findLatestManifest(runId);
+    if (baseline) {
+      console.log('\n--- Phase 5: Regression Detection ---');
+      console.log(`[regress] Baseline: ${baseline.run_id} (${baseline.git_commit})`);
+      const regressionReport = detectRegressions(baseline, diffManifest);
+      const regressionPath = saveRegressionReport(regressionReport, runId);
+      console.log(regressionReport.summary_table);
+      console.log(`Regression report: ${regressionPath}`);
+
+      if (opts.failOnRegression && regressionReport.has_unexpected_regressions) {
+        console.error(`\n!! ${regressionReport.unexpected_regressions.length} unexpected regression(s) — failing`);
+        process.exit(1);
+      }
+    } else {
+      console.log('\n[regress] No previous baseline — skipping regression detection (first run)');
+    }
+  });
+program.addCommand(prCheckCmd);
 
 program.parse();
