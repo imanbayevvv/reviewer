@@ -28,6 +28,7 @@ export interface FigmaCandidate {
   match_reasons: string[];     // e.g. ['visual', 'lexical', 'context', 'hybrid']
   rank: 'recommended' | 'similar' | 'other';
   already_mapped: boolean;
+  score_profile: ScoreProfile | null;
   // v0.6 compat
   score: number;
   visual_score?: number;
@@ -310,6 +311,33 @@ function isGenericLayoutName(name: string): boolean {
   return GENERIC_PATTERNS.some(p => p.test(trimmed));
 }
 
+// ── v0.6.2 Ranking Recovery Constants ────────────────────
+
+/** Minimum gap between top-1 and top-2 normalized visual scores to trust visual strongly */
+const VISUAL_DOMINANCE_MARGIN = 0.10;
+
+/** Adaptive hybrid weight profiles */
+const WEIGHTS = {
+  lexical_dominant:  { visual: 0.35, lexical: 0.45, context: 0.20 },
+  visual_dominant:   { visual: 0.60, lexical: 0.15, context: 0.25 },
+  balanced:          { visual: 0.40, lexical: 0.35, context: 0.25 },
+} as const;
+
+/** Strong suppression thresholds (relaxed from v0.6.1) */
+const STRONG_SUPPRESSION = { visual_min: 0.85, lexical_max: 0.20, context_max: 0.20, damping: 0.35 };
+/** Mild suppression thresholds */
+const MILD_SUPPRESSION = { visual_min: 0.60, lexical_max: 0.15, damping: 0.75 };
+
+type ScoreProfile = 'visual-dominant' | 'hybrid-balanced' | 'lexical-dominant';
+
+function selectWeights(lexical: number, visual: number | null): {
+  visual: number; lexical: number; context: number; profile: ScoreProfile;
+} {
+  if (lexical >= 0.7) return { ...WEIGHTS.lexical_dominant, profile: 'lexical-dominant' };
+  if (visual !== null && visual >= 0.8 && lexical < 0.3) return { ...WEIGHTS.visual_dominant, profile: 'visual-dominant' };
+  return { ...WEIGHTS.balanced, profile: 'hybrid-balanced' };
+}
+
 // ── Hybrid scoring engine ────────────────────────────────
 //
 // Produces a unified final_score from three signal channels:
@@ -318,14 +346,16 @@ function isGenericLayoutName(name: string): boolean {
 //   context_score  (0-1): flow/page/section/variant/viewport alignment
 //   visual_score   (0-1): cosine similarity of image embeddings
 //
-// Weights adapt based on signal availability:
-//   With visual:    visual 0.35, lexical 0.40, context 0.25
-//   Without visual: lexical 0.60, context 0.40
+// v0.6.2: Adaptive weights based on signal strength:
+//   Lexical-dominant (lex>=0.7): visual 0.35, lexical 0.45, context 0.20
+//   Visual-dominant  (vis>=0.8): visual 0.60, lexical 0.15, context 0.25
+//   Balanced (default):          visual 0.40, lexical 0.35, context 0.25
+//   Without visual:              lexical 0.60, context 0.40
 //
-// False-positive suppression:
-//   If visual is high (>0.7) but lexical+context are both low (<0.15),
-//   the visual contribution is dampened. This handles structurally
-//   similar but semantically unrelated screens (dashboards, forms, lists).
+// False-positive suppression (relaxed in v0.6.2):
+//   Strong: visual >= 0.85, lexical <= 0.20, context <= 0.20
+//   Mild: visual >= 0.60, lexical <= 0.15
+//   Skipped when visual is dominant and this is the top visual candidate.
 
 interface ScoringContext {
   screenId: string;
@@ -343,6 +373,7 @@ interface ScoreBreakdown {
   final: number;       // 0-1
   confidence: 'high' | 'medium' | 'low';
   reasons: string[];
+  score_profile: ScoreProfile | null;
 }
 
 function computeLexicalScore(frame: RawFrame, ctx: ScoringContext): number {
@@ -411,32 +442,52 @@ function computeHybridScore(
   ctx: ScoringContext,
   normalizedVisual: number | null,
   visualAvailable: boolean,
+  visualDominant: boolean = false,
+  topVisualNodeId: string | null = null,
 ): ScoreBreakdown {
   const lexical = computeLexicalScore(frame, ctx);
   const context = computeContextScore(frame, ctx);
 
   const reasons: string[] = [];
   let final: number;
+  let scoreProfile: ScoreProfile | null = null;
 
   if (normalizedVisual !== null) {
-    // ── False-positive suppression ──
+    const isTopVisualCandidate = frame.node_id === topVisualNodeId;
     let effectiveVisual = normalizedVisual;
 
-    const lexicalWeak = lexical < 0.15;
-    const contextWeak = context < 0.15;
+    // ── False-positive suppression (relaxed in v0.6.2) ──
+    // Skip suppression entirely when visual is dominant and this is the top visual match
+    if (!(visualDominant && isTopVisualCandidate)) {
+      if (normalizedVisual >= STRONG_SUPPRESSION.visual_min
+          && lexical <= STRONG_SUPPRESSION.lexical_max
+          && context <= STRONG_SUPPRESSION.context_max) {
+        effectiveVisual = normalizedVisual * STRONG_SUPPRESSION.damping;
+      } else if (normalizedVisual >= MILD_SUPPRESSION.visual_min
+                 && lexical <= MILD_SUPPRESSION.lexical_max) {
+        effectiveVisual = normalizedVisual * MILD_SUPPRESSION.damping;
+      }
 
-    if (normalizedVisual > 0.7 && lexicalWeak && contextWeak) {
-      effectiveVisual = normalizedVisual * 0.35;
-    } else if (normalizedVisual > 0.6 && lexicalWeak) {
-      effectiveVisual = normalizedVisual * 0.6;
+      // Generic layout penalty: only when NOT top visual AND both text signals disagree
+      if (isGenericLayoutName(frame.name) && !isTopVisualCandidate
+          && normalizedVisual > 0.6 && lexical < 0.25 && context < 0.25) {
+        effectiveVisual *= 0.5;
+      }
     }
 
-    if (isGenericLayoutName(frame.name) && normalizedVisual > 0.6 && lexical < 0.25) {
-      effectiveVisual *= 0.5;
-    }
+    // Adaptive weights (v0.6.2)
+    const weights = selectWeights(lexical, normalizedVisual);
+    scoreProfile = weights.profile;
 
-    // Weighted combination: visual 0.35, lexical 0.40, context 0.25
-    final = effectiveVisual * 0.35 + lexical * 0.40 + context * 0.25;
+    // Visual-dominant override: when visual clearly leads, trust it fully
+    if (visualDominant && isTopVisualCandidate) {
+      scoreProfile = 'visual-dominant';
+      final = effectiveVisual * WEIGHTS.visual_dominant.visual
+            + lexical * WEIGHTS.visual_dominant.lexical
+            + context * WEIGHTS.visual_dominant.context;
+    } else {
+      final = effectiveVisual * weights.visual + lexical * weights.lexical + context * weights.context;
+    }
 
     // Reason labels
     if (normalizedVisual >= 0.5) reasons.push('visual');
@@ -449,12 +500,10 @@ function computeHybridScore(
       else reasons.push('context');
     }
   } else if (visualAvailable) {
-    // Visual data exists for other candidates but NOT this one.
-    // This frame has no embedding — it's an unknown. Penalize slightly
-    // so frames WITH visual data that confirms the match rank higher.
+    // Visual data exists for other candidates but NOT this one — penalize
+    // v0.6.2: increased penalty from 0.85 to 0.75 to prioritize visually-confirmed frames
     final = lexical * 0.55 + context * 0.35;
-    // Small penalty for missing visual confirmation
-    final *= 0.85;
+    final *= 0.75;
 
     if (lexical >= 0.3) reasons.push('lexical');
     if (context >= 0.3) reasons.push('context');
@@ -492,6 +541,7 @@ function computeHybridScore(
     final: Math.round(final * 1000) / 1000,
     confidence,
     reasons,
+    score_profile: scoreProfile,
   };
 }
 
@@ -515,9 +565,9 @@ function normalizeVisualScores(
   const minScore = Math.min(...scores);
   const range = maxScore - minScore;
 
-  // If the range is tiny (<0.05), visual is not discriminative at all
+  // If the range is truly flat (<0.02), visual is not discriminative at all
   // → compress all visual to a low baseline value
-  if (range < 0.05) {
+  if (range < 0.02) {
     for (const [nodeId] of visualScoreMap) {
       normalized.set(nodeId, 0.15); // minimal tiebreaker
     }
@@ -525,14 +575,15 @@ function normalizeVisualScores(
   }
 
   // Normalize to 0..1 based on min-max within the visual score distribution
-  // Then scale by the overall quality: high max with good spread = more trustworthy
-  const spreadQuality = Math.min(1, range / 0.15); // 0..1, full credit at range >= 0.15
+  // spreadQuality scales trust: full credit at range >= 0.12
+  const spreadQuality = Math.min(1, range / 0.12);
 
   for (const [nodeId, { score }] of visualScoreMap) {
     const relative = (score - minScore) / range; // 0..1 within distribution
-    // Scale by spread quality: if spread is good, top candidate gets up to 0.9
-    // If spread is poor, even the top candidate gets dampened
-    normalized.set(nodeId, relative * spreadQuality * 0.9 + 0.1 * spreadQuality);
+    // Constant floor of 0.10 prevents over-compression of low-spread signals
+    const floor = 0.10;
+    const scaled = relative * spreadQuality * 0.85 + floor;
+    normalized.set(nodeId, Math.min(scaled, 0.95));
   }
 
   return normalized;
@@ -566,10 +617,18 @@ function scoreAllCandidates(
   const normalizedVisual = normalizeVisualScores(visualScoreMap);
   const visualAvailable = normalizedVisual.size > 0;
 
+  // v0.6.2: Detect visual dominance — top-1 visual far ahead of top-2
+  const sortedVisuals = Array.from(normalizedVisual.values()).sort((a, b) => b - a);
+  const visualDominant = sortedVisuals.length >= 2
+    && (sortedVisuals[0] - sortedVisuals[1]) > VISUAL_DOMINANCE_MARGIN;
+  const topVisualNodeId = visualAvailable
+    ? Array.from(normalizedVisual.entries()).sort(([, a], [, b]) => b - a)[0]?.[0] ?? null
+    : null;
+
   return frames.map(f => {
     const normVisual = normalizedVisual.get(f.node_id) ?? null;
 
-    const breakdown = computeHybridScore(f, ctx, normVisual, visualAvailable);
+    const breakdown = computeHybridScore(f, ctx, normVisual, visualAvailable, visualDominant, topVisualNodeId);
 
     // Rank based on final score
     let rank: 'recommended' | 'similar' | 'other';
@@ -596,6 +655,7 @@ function scoreAllCandidates(
       match_reasons: breakdown.reasons,
       rank,
       already_mapped: mapped.has(f.node_id),
+      score_profile: breakdown.score_profile,
       // v0.6 compat fields
       score: Math.round(breakdown.final * 100),
       visual_score: displayVisual !== null ? Math.round(displayVisual * 1000) / 1000 : undefined,

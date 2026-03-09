@@ -114,6 +114,7 @@ interface FigmaCandidate {
   match_reasons: string[];
   rank: 'recommended' | 'similar' | 'other';
   already_mapped: boolean;
+  score_profile?: 'visual-dominant' | 'hybrid-balanced' | 'lexical-dominant' | null;
   visual_score?: number;
 }
 
@@ -1573,6 +1574,12 @@ const REASON_COLORS: Record<string, string> = {
   hybrid: '#d97706',
 };
 
+const PROFILE_STYLES: Record<string, { bg: string; fg: string; label: string }> = {
+  'visual-dominant':  { bg: '#f5f3ff', fg: '#7c3aed', label: 'VIS' },
+  'hybrid-balanced':  { bg: '#fffbeb', fg: '#d97706', label: 'BAL' },
+  'lexical-dominant': { bg: '#eff6ff', fg: '#2563eb', label: 'LEX' },
+};
+
 const CONFIDENCE_COLORS: Record<string, { bg: string; fg: string; border: string }> = {
   high: { bg: '#f0fdf4', fg: '#166534', border: '#bbf7d0' },
   medium: { bg: '#fffbeb', fg: '#92400e', border: '#fde68a' },
@@ -1624,6 +1631,18 @@ function CandidateRow({
               {r}
             </span>
           ))}
+          {c.score_profile && PROFILE_STYLES[c.score_profile] && (
+            <span style={{
+              fontSize: 9, padding: '1px 5px', borderRadius: 3,
+              background: PROFILE_STYLES[c.score_profile].bg,
+              color: PROFILE_STYLES[c.score_profile].fg,
+              fontWeight: 700,
+              border: `1px solid ${PROFILE_STYLES[c.score_profile].fg}30`,
+              letterSpacing: '0.5px',
+            }}>
+              {PROFILE_STYLES[c.score_profile].label}
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>
           <code>{c.node_id}</code>

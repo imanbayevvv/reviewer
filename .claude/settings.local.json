@@ -27,7 +27,13 @@
       "Bash(source .env:*)",
       "Bash(npx:*)",
       "Bash(grep:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //PID 31304 //F)",
+      "Bash(taskkill //PID 11292 //F)",
+      "Bash(where pnpm)",
+      "Bash(where npx)"
     ]
   }
 }
