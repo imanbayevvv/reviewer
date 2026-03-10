@@ -11,6 +11,13 @@ import { generateRunId, isoNow, getGitCommit, getGitBranch } from './utils.js';
 import { RUNS_STORAGE, STORAGE_DIR } from './config.js';
 import { findLatestManifest, loadManifest, detectRegressions, saveRegressionReport } from './regression.js';
 import { loadProjectConfig, activateProject, hasProjectsDir } from './project-config.js';
+import {
+  approveRun,
+  hasApprovedBaseline,
+  loadBaselineManifest,
+  loadBaselineDiffManifest,
+  getBaselineDir,
+} from './baseline.js';
 import { runPRCommentCLI } from './pr-comment.js';
 import { embedAllFigmaFrames, embedRuntimeScreen, EMBEDDINGS_DIR } from './visual-embedding.js';
 import { runEvaluation } from './evaluate-mapping.js';
@@ -344,9 +351,13 @@ const fullCmd = new Command('full')
     console.log(`HTML report:      ${reportPath}`);
 
     // ── Phase 5: Regression Detection ──
-    const baseline = findLatestManifest(runId);
+    console.log('\n--- Phase 5: Regression Detection ---');
+    const approvedBaseline = loadBaselineDiffManifest();
+    const baseline = approvedBaseline ?? findLatestManifest(runId);
     if (baseline) {
-      console.log('\n--- Phase 5: Regression Detection ---');
+      if (approvedBaseline) {
+        console.log(`[regress] using approved baseline from ${getBaselineDir()}`);
+      }
       console.log(`[regress] Baseline: ${baseline.run_id} (${baseline.git_commit})`);
       const regressionReport = detectRegressions(baseline, diffManifest);
       const regressionPath = saveRegressionReport(regressionReport, runId);
@@ -358,7 +369,8 @@ const fullCmd = new Command('full')
         process.exit(1);
       }
     } else {
-      console.log('\n[regress] No previous baseline — skipping regression detection (first run)');
+      console.log('[regress] No approved baseline and no previous run — skipping regression detection.');
+      console.log('[regress] Tip: run "reviewer approve --latest" after a successful run to set the baseline.');
     }
   });
 addFilterOptions(fullCmd);
@@ -388,8 +400,9 @@ const regressCmd = new Command('regress')
       }
     }
 
-    // Resolve baseline manifest
+    // Resolve baseline manifest: explicit > approved baseline > latest run
     let baseline: ReturnType<typeof loadManifest>;
+    let usingApproved = false;
     if (opts.baseline) {
       baseline = loadManifest(opts.baseline);
       if (!baseline) {
@@ -397,13 +410,23 @@ const regressCmd = new Command('regress')
         process.exit(1);
       }
     } else {
-      baseline = findLatestManifest(current!.run_id);
-      if (!baseline) {
-        console.log('[regress] No previous baseline found — this is the first run. No regressions to detect.');
-        process.exit(0);
+      const approved = loadBaselineDiffManifest();
+      if (approved) {
+        baseline = approved;
+        usingApproved = true;
+      } else {
+        baseline = findLatestManifest(current!.run_id);
+        if (!baseline) {
+          console.log('[regress] No approved baseline and no previous run — no regressions to detect.');
+          console.log('[regress] Tip: run "reviewer approve --latest" after a successful run.');
+          process.exit(0);
+        }
       }
     }
 
+    if (usingApproved) {
+      console.log(`[regress] using approved baseline from ${getBaselineDir()}`);
+    }
     console.log(`\n[regress] Comparing: ${current!.run_id} (current) vs ${baseline!.run_id} (baseline)\n`);
 
     const report = detectRegressions(baseline!, current!);
@@ -616,9 +639,13 @@ const prCheckCmd = new Command('pr-check')
     console.log(`HTML report:      ${reportPath}`);
 
     // ── Phase 5: Regression Detection ──
-    const baseline = findLatestManifest(runId);
+    console.log('\n--- Phase 5: Regression Detection ---');
+    const approvedBaseline = loadBaselineDiffManifest();
+    const baseline = approvedBaseline ?? findLatestManifest(runId);
     if (baseline) {
-      console.log('\n--- Phase 5: Regression Detection ---');
+      if (approvedBaseline) {
+        console.log(`[regress] using approved baseline from ${getBaselineDir()}`);
+      }
       console.log(`[regress] Baseline: ${baseline.run_id} (${baseline.git_commit})`);
       const regressionReport = detectRegressions(baseline, diffManifest);
       const regressionPath = saveRegressionReport(regressionReport, runId);
@@ -630,9 +657,83 @@ const prCheckCmd = new Command('pr-check')
         process.exit(1);
       }
     } else {
-      console.log('\n[regress] No previous baseline — skipping regression detection (first run)');
+      console.log('[regress] No approved baseline and no previous run — skipping regression detection.');
+      console.log('[regress] Tip: run "reviewer approve --latest" after a successful run to set the baseline.');
     }
   });
 program.addCommand(prCheckCmd);
+
+// reviewer approve — promote a run to the approved baseline
+program
+  .command('approve')
+  .description('Approve a completed run as the current baseline for regression comparison')
+  .option('--run <runId>', 'Run ID to approve')
+  .option('--latest', 'Approve the most recent completed run (default when no --run given)')
+  .action(async (opts: { run?: string; latest?: boolean }) => {
+    // Resolve which run to approve
+    let runId: string;
+    if (opts.run) {
+      runId = opts.run;
+    } else {
+      // Default: latest run (same behaviour as --latest)
+      const latestManifest = findLatestManifest();
+      if (!latestManifest) {
+        console.error('[baseline] No completed runs found. Run "reviewer full" or "reviewer diff" first.');
+        process.exit(1);
+      }
+      runId = latestManifest.run_id;
+    }
+
+    const projectId: string = program.opts().project ?? 'default';
+    console.log(`[baseline] approving run ${runId} for project ${projectId}`);
+
+    try {
+      const manifest = approveRun({ runId, projectId });
+      console.log(`[baseline] copied ${manifest.approvedScreens.length} screen baseline(s)`);
+      console.log(`[baseline] baseline updated successfully`);
+      console.log(`[baseline] location: ${getBaselineDir()}`);
+    } catch (err) {
+      console.error(`[baseline] approval failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+// reviewer baseline-status — show current approved baseline info
+program
+  .command('baseline-status')
+  .description('Show status of the current approved baseline')
+  .action(() => {
+    console.log('');
+    if (!hasApprovedBaseline()) {
+      console.log('No approved baseline found.');
+      console.log(`Expected location: ${getBaselineDir()}`);
+      console.log('\nRun "reviewer approve --latest" after a successful run to create one.');
+      return;
+    }
+
+    const meta = loadBaselineManifest();
+    const diff = loadBaselineDiffManifest();
+
+    console.log('─'.repeat(60));
+    console.log('Approved Baseline');
+    console.log('─'.repeat(60));
+    if (meta) {
+      console.log(`Project       : ${meta.projectId}`);
+      console.log(`Approved at   : ${meta.approvedAt}`);
+      console.log(`Source run    : ${meta.sourceRunId}`);
+      console.log(`Screens       : ${meta.approvedScreens.length}`);
+      if (meta.approvedScreens.length > 0) {
+        for (const s of meta.approvedScreens) {
+          console.log(`  - ${s}`);
+        }
+      }
+    }
+    if (diff) {
+      console.log(`Git commit    : ${diff.git_commit} (${diff.git_branch})`);
+      console.log(`Diff summary  : ${diff.summary.passed} passed / ${diff.summary.failed} failed`);
+    }
+    console.log(`Location      : ${getBaselineDir()}`);
+    console.log('─'.repeat(60));
+  });
 
 program.parse();
