@@ -11,14 +11,36 @@ dotenv.config({ path: path.join(PROJECT_ROOT, '.env') });
 
 /** Registry YAML files */
 export const REGISTRY_DIR = path.join(PROJECT_ROOT, 'registry');
-export const SCREENS_YAML = path.join(REGISTRY_DIR, 'screens.yaml');
-export const FLOWS_YAML = path.join(REGISTRY_DIR, 'flows.yaml');
+// `let` so multi-project support can override these via overrideProjectPaths()
+export let SCREENS_YAML = path.join(REGISTRY_DIR, 'screens.yaml');
+export let FLOWS_YAML = path.join(REGISTRY_DIR, 'flows.yaml');
 
 /** Artifact storage (gitignored) */
-export const STORAGE_DIR = path.join(PROJECT_ROOT, 'storage');
-export const FIGMA_STORAGE = path.join(STORAGE_DIR, 'figma');
-export const RUNTIME_STORAGE = path.join(STORAGE_DIR, 'runtime');
-export const RUNS_STORAGE = path.join(STORAGE_DIR, 'runs');
+// `let` so multi-project support can override these via overrideProjectPaths()
+export let STORAGE_DIR = path.join(PROJECT_ROOT, 'storage');
+export let FIGMA_STORAGE = path.join(STORAGE_DIR, 'figma');
+export let RUNTIME_STORAGE = path.join(STORAGE_DIR, 'runtime');
+export let RUNS_STORAGE = path.join(STORAGE_DIR, 'runs');
+
+/**
+ * Override path constants for multi-project support.
+ * Called by activateProject() in project-config.ts before any command runs.
+ * Uses ESM live bindings — all importers see the updated values immediately.
+ */
+export function overrideProjectPaths(overrides: {
+  screensYaml?: string;
+  flowsYaml?: string;
+  storageDir?: string;
+}): void {
+  if (overrides.screensYaml) SCREENS_YAML = overrides.screensYaml;
+  if (overrides.flowsYaml) FLOWS_YAML = overrides.flowsYaml;
+  if (overrides.storageDir) {
+    STORAGE_DIR = overrides.storageDir;
+    FIGMA_STORAGE = path.join(overrides.storageDir, 'figma');
+    RUNTIME_STORAGE = path.join(overrides.storageDir, 'runtime');
+    RUNS_STORAGE = path.join(overrides.storageDir, 'runs');
+  }
+}
 
 /** Diff engine defaults */
 export const DIFF_PIXELMATCH_THRESHOLD = 0.1; // anti-aliasing tolerance (0=exact, 1=anything)

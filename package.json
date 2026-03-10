@@ -6,6 +6,7 @@
     "build": "turbo build",
     "lint": "turbo lint",
     "clean": "turbo clean",
+    "reviewer": "pnpm -C tools/reviewer cli",
     "reviewer:figma": "pnpm -C tools/reviewer figma",
     "reviewer:runtime": "pnpm -C tools/reviewer runtime",
     "reviewer:run": "pnpm -C tools/reviewer run",
@@ -13,6 +14,7 @@
     "reviewer:full": "pnpm -C tools/reviewer cli full",
     "reviewer:diff": "pnpm -C tools/reviewer cli diff",
     "reviewer:regress": "pnpm -C tools/reviewer cli regress",
+    "reviewer:pr-check": "pnpm -C tools/reviewer cli pr-check",
     "reviewer:embed-figma": "pnpm -C tools/reviewer embed-figma",
     "reviewer:embed-runtime": "pnpm -C tools/reviewer cli embed-runtime",
     "reviewer:evaluate-mapping": "pnpm -C tools/reviewer cli evaluate-mapping"

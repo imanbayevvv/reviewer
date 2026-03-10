@@ -33,7 +33,8 @@
       "Bash(taskkill //PID 31304 //F)",
       "Bash(taskkill //PID 11292 //F)",
       "Bash(where pnpm)",
-      "Bash(where npx)"
+      "Bash(where npx)",
+      "Bash(taskkill //PID 12412 //F)"
     ]
   }
 }

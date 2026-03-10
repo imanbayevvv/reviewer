@@ -10,6 +10,7 @@ import { generateReport, saveReport } from './report-html.js';
 import { generateRunId, isoNow, getGitCommit, getGitBranch } from './utils.js';
 import { RUNS_STORAGE, STORAGE_DIR } from './config.js';
 import { findLatestManifest, loadManifest, detectRegressions, saveRegressionReport } from './regression.js';
+import { loadProjectConfig, activateProject, hasProjectsDir } from './project-config.js';
 import { runPRCommentCLI } from './pr-comment.js';
 import { embedAllFigmaFrames, embedRuntimeScreen, EMBEDDINGS_DIR } from './visual-embedding.js';
 import { runEvaluation } from './evaluate-mapping.js';
@@ -114,7 +115,17 @@ function printDiffSummary(manifest: ReturnType<typeof buildDiffManifest>) {
 const program = new Command()
   .name('reviewer')
   .description('Visual review pipeline for Resale platform')
-  .version('0.2.0');
+  .version('0.2.0')
+  .option('--project <projectId>', 'Project to run against (must exist in projects/<projectId>/)');
+
+// ── Multi-project: resolve + activate config before any command runs ─────────
+program.hook('preAction', async () => {
+  const projectId: string | undefined = program.opts().project;
+  if (!projectId) return; // no --project → backward-compat single-project mode
+
+  const cfg = await loadProjectConfig(projectId);
+  activateProject(cfg);
+});
 
 // reviewer figma
 const figmaCmd = new Command('figma')
