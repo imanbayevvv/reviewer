@@ -28,6 +28,17 @@ export interface ResolvedMask {
   pixels_masked: number;
 }
 
+export interface MaskDiagnostic {
+  /** CSS selector string from registry */
+  selector: string;
+  /** Number of elements (bounding boxes) this selector resolved to */
+  elements: number;
+  /** Fraction of total image pixels that are masked by this selector (0..1) */
+  coverage: number;
+  /** Per-selector warning strings */
+  warnings: string[];
+}
+
 export interface MaskResult {
   /** Single-channel buffer: 255 = masked, 0 = compare */
   buffer: Uint8Array;
@@ -37,6 +48,8 @@ export interface MaskResult {
   masks: ResolvedMask[];
   /** Warnings (e.g., unresolvable selectors) */
   warnings: string[];
+  /** Structured per-selector diagnostics for reporting */
+  diagnostics: MaskDiagnostic[];
 }
 
 // ── Resolve ──────────────────────────────────────────────
@@ -92,6 +105,7 @@ export function resolveMasks(
   const buffer = new Uint8Array(totalPixels); // initialized to 0
   const resolved: ResolvedMask[] = [];
   const warnings: string[] = [];
+  const diagnostics: MaskDiagnostic[] = [];
   let totalMaskedPixels = 0;
 
   for (const mask of registryMasks) {
@@ -106,6 +120,13 @@ export function resolveMasks(
         source: 'unresolved',
         pixels_masked: 0,
       });
+      // Zero-match diagnostic
+      diagnostics.push({
+        selector: mask.selector,
+        elements: 0,
+        coverage: 0,
+        warnings: ['selector matched nothing'],
+      });
       continue;
     }
 
@@ -118,7 +139,7 @@ export function resolveMasks(
     resolved.push({
       selector: mask.selector,
       reason: mask.reason,
-      box: boxes.length === 1 ? boxes[0] : boxes[0], // primary box for report display
+      box: boxes[0], // primary box for report display
       source: 'runtime_metadata',
       pixels_masked: pixelsMasked,
     });
@@ -126,9 +147,21 @@ export function resolveMasks(
     if (boxes.length > 1) {
       warnings.push(`Mask "${mask.selector}" resolved to ${boxes.length} elements (${pixelsMasked}px total)`);
     }
+
+    // Build per-selector diagnostic
+    const coverage = totalPixels > 0 ? pixelsMasked / totalPixels : 0;
+    const diagWarnings: string[] = [];
+    if (coverage > 0.15) diagWarnings.push('selector covers large area (>15%)');
+    if (boxes.length > 3) diagWarnings.push('selector matched many elements');
+    diagnostics.push({
+      selector: mask.selector,
+      elements: boxes.length,
+      coverage,
+      warnings: diagWarnings,
+    });
   }
 
-  return { buffer, totalMaskedPixels, masks: resolved, warnings };
+  return { buffer, totalMaskedPixels, masks: resolved, warnings, diagnostics };
 }
 
 /**

@@ -16,7 +16,7 @@ import path from 'node:path';
 import { FIGMA_STORAGE, RUNTIME_STORAGE, RUNS_STORAGE } from './config.js';
 import type { Screen, RegistryCoverage, DriftClassification } from './registry.js';
 import { readPng, writePng, compareImages, createOverlay, resizeNearest, type ImageData } from './image-ops.js';
-import { resolveMasks, type MaskBox, type ResolvedMask } from './masking.js';
+import { resolveMasks, type MaskBox, type ResolvedMask, type MaskDiagnostic } from './masking.js';
 import { computeMetrics, evaluateThresholds, type DiffStatus, type ScoringResult } from './scoring.js';
 import { ensureDir, isoNow } from './utils.js';
 
@@ -37,6 +37,7 @@ export interface ScreenDiffResult {
     dimension_match: boolean;
   };
   masks_applied: ResolvedMask[];
+  maskDiagnostics: MaskDiagnostic[];
   metrics: ScoringResult['metrics'] | null;
   threshold_eval: ScoringResult['threshold_eval'] | null;
   failure_reasons: string[];
@@ -218,6 +219,7 @@ export function diffScreen(screen: Screen, runId: string): ScreenDiffResult {
       dimension_match: dimMatch,
     },
     masks_applied: maskResult.masks,
+    maskDiagnostics: maskResult.diagnostics,
     metrics: scoring.metrics,
     threshold_eval: scoring.threshold_eval,
     failure_reasons: scoring.failure_reasons,
@@ -246,6 +248,18 @@ export function diffAllScreens(screens: Screen[], runId: string): ScreenDiffResu
     console.log(`  -> ${result.status} (mismatch: ${pct})`);
     if (result.warnings.length > 0) {
       for (const w of result.warnings) console.log(`  ⚠ ${w}`);
+    }
+    if (result.maskDiagnostics.length > 0) {
+      console.log('  Mask diagnostics:');
+      for (const d of result.maskDiagnostics) {
+        console.log(`    selector: ${d.selector}`);
+        console.log(`    elements: ${d.elements}`);
+        console.log(`    coverage: ${(d.coverage * 100).toFixed(1)}%`);
+        if (d.warnings.length > 0) {
+          console.log(`    warnings:`);
+          for (const w of d.warnings) console.log(`      - ${w}`);
+        }
+      }
     }
     results.push(result);
   }
@@ -320,6 +334,7 @@ function makeResult(
     overlay_artifact: null,
     dimensions: { figma: null, runtime: null, normalized: false, dimension_match: false },
     masks_applied: [],
+    maskDiagnostics: [],
     metrics: null,
     threshold_eval: null,
     failure_reasons: [],

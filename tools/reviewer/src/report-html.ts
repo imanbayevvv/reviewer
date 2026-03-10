@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RUNS_STORAGE } from './config.js';
 import type { DiffManifest, ScreenDiffResult } from './diff-engine.js';
+import type { MaskDiagnostic } from './masking.js';
 import { ensureDir } from './utils.js';
 
 function imgToBase64(filePath: string | null): string | null {
@@ -73,11 +74,44 @@ function screenCard(r: ScreenDiffResult): string {
       </div>`
     : '';
 
-  const masksInfo = r.masks_applied.length > 0
-    ? `<div style="margin-top:4px;font-size:11px;color:#6b7280">
-        Masks: ${r.masks_applied.map((m) => `<code>${escHtml(m.selector)}</code> (${m.pixels_masked}px, ${m.source})`).join(', ')}
+  // Mask Diagnostics table — use maskDiagnostics when present, fall back to
+  // legacy masks_applied so old saved manifests still render something useful.
+  const diagRows = (r.maskDiagnostics ?? []) as MaskDiagnostic[];
+  const maskDiagnosticsHtml = diagRows.length > 0
+    ? `<div style="margin-top:10px">
+        <div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:4px">Mask Diagnostics</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead>
+            <tr style="background:#f3f4f6;text-align:left">
+              <th style="padding:4px 8px;border:1px solid #e5e7eb;color:#374151">Selector</th>
+              <th style="padding:4px 8px;border:1px solid #e5e7eb;color:#374151;white-space:nowrap">Elements</th>
+              <th style="padding:4px 8px;border:1px solid #e5e7eb;color:#374151;white-space:nowrap">Coverage</th>
+              <th style="padding:4px 8px;border:1px solid #e5e7eb;color:#374151">Warnings</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${diagRows.map((d) => {
+              const coveragePct = (d.coverage * 100).toFixed(1);
+              const hasWarnings = d.warnings.length > 0;
+              const rowBg = hasWarnings ? '#fffbeb' : '';
+              const warningsCell = hasWarnings
+                ? d.warnings.map((w) => `<div style="color:#92400e">⚠ ${escHtml(w)}</div>`).join('')
+                : '<span style="color:#9ca3af">—</span>';
+              return `<tr style="background:${rowBg}">
+                <td style="padding:4px 8px;border:1px solid #e5e7eb"><code>${escHtml(d.selector)}</code></td>
+                <td style="padding:4px 8px;border:1px solid #e5e7eb;text-align:center">${d.elements}</td>
+                <td style="padding:4px 8px;border:1px solid #e5e7eb;text-align:right;${d.coverage > 0.15 ? 'color:#b45309;font-weight:600' : ''}">${coveragePct}%</td>
+                <td style="padding:4px 8px;border:1px solid #e5e7eb">${warningsCell}</td>
+              </tr>`;
+            }).join('\n')}
+          </tbody>
+        </table>
       </div>`
-    : '';
+    : (r.masks_applied.length > 0
+        ? `<div style="margin-top:4px;font-size:11px;color:#6b7280">
+            Masks: ${r.masks_applied.map((m) => `<code>${escHtml(m.selector)}</code> (${m.pixels_masked}px, ${m.source})`).join(', ')}
+          </div>`
+        : '');
 
   const thresholdInfo = r.threshold_eval
     ? `<div style="margin-top:4px;font-size:11px;color:#6b7280">
@@ -97,7 +131,7 @@ function screenCard(r: ScreenDiffResult): string {
     </div>
     ${failReasons}
     ${warningsList}
-    ${masksInfo}
+    ${maskDiagnosticsHtml}
     ${thresholdInfo}
   </div>`;
 }
