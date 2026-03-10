@@ -22,6 +22,7 @@ import { runPRCommentCLI } from './pr-comment.js';
 import { embedAllFigmaFrames, embedRuntimeScreen, EMBEDDINGS_DIR } from './visual-embedding.js';
 import { runEvaluation } from './evaluate-mapping.js';
 import { getChangedFiles, getAffectedScreens, logPRImpact } from './pr-impact.js';
+import { bootstrapProject, projectExists, isValidProjectId, validateScaffold } from './bootstrap.js';
 
 // ── Shared options ───────────────────────────────────────
 
@@ -734,6 +735,66 @@ program
     }
     console.log(`Location      : ${getBaselineDir()}`);
     console.log('─'.repeat(60));
+  });
+
+// reviewer init — bootstrap a new FlowCanvas project
+program
+  .command('init <projectId>')
+  .description('Scaffold a new FlowCanvas project in projects/<projectId>/')
+  .action((projectId: string) => {
+    // Validate ID format: lowercase alphanumeric, hyphens and underscores allowed
+    if (!isValidProjectId(projectId)) {
+      console.error(`[init] Invalid project ID: "${projectId}"`);
+      console.error('[init] Must start with a lowercase letter or digit and contain only [a-z0-9_-].');
+      process.exit(1);
+    }
+
+    // Guard: do not overwrite an existing project
+    if (projectExists(projectId)) {
+      console.error(`[init] Project "${projectId}" already exists.`);
+      console.error(`[init] Location: projects/${projectId}/`);
+      console.error('[init] Remove or rename the directory first if you want to re-scaffold.');
+      process.exit(1);
+    }
+
+    console.log(`\n[init] Bootstrapping FlowCanvas project: ${projectId}\n`);
+
+    let result: ReturnType<typeof bootstrapProject>;
+    try {
+      result = bootstrapProject(projectId);
+    } catch (err) {
+      console.error(`[init] Scaffold failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    // Report created files
+    for (const f of result.files) {
+      const rel = path.relative(result.projectDir, f);
+      console.log(`  + projects/${projectId}/${rel}`);
+    }
+
+    // Post-write validation
+    const problems = validateScaffold(result.projectDir);
+    if (problems.length > 0) {
+      console.warn('\n[init] Validation warnings:');
+      for (const p of problems) console.warn(`  ⚠ ${p}`);
+    }
+
+    // Next steps
+    console.log('\n' + '─'.repeat(60));
+    console.log('Next steps:');
+    console.log('─'.repeat(60));
+    console.log(`1. Edit  projects/${projectId}/flowcanvas.config.ts`);
+    console.log('      → Set appBaseUrl to your dev server URL');
+    console.log(`2. Edit  projects/${projectId}/screens.yaml`);
+    console.log('      → Replace the example screen with your real screens');
+    console.log('      → Fill in figma.file_key and figma.node_id for each entry');
+    console.log('3. Export your Figma token:');
+    console.log('      export FIGMA_TOKEN=your_personal_access_token');
+    console.log('4. Run the full pipeline:');
+    console.log(`      pnpm reviewer --project ${projectId} full`);
+    console.log('─'.repeat(60));
+    console.log(`\nSee projects/${projectId}/README.md for full command reference.\n`);
   });
 
 program.parse();

@@ -34,7 +34,16 @@
       "Bash(taskkill //PID 11292 //F)",
       "Bash(where pnpm)",
       "Bash(where npx)",
-      "Bash(taskkill //PID 12412 //F)"
+      "Bash(taskkill //PID 12412 //F)",
+      "Bash(dir D:vibecodeResaleprojects /B)",
+      "Bash(cmd /c \"dir D:\\\\vibecode\\\\Resale\\\\projects /B\")",
+      "Bash(cmd /c \"dir D:\\\\vibecode\\\\Resale\\\\projects\")",
+      "Bash(cmd /c \"cd /d D:\\\\vibecode\\\\Resale && dir projects\")",
+      "Bash(cmd /c \"cd /d D:\\\\vibecode\\\\Resale && pnpm -C tools/reviewer cli init demo-project 2>&1\")",
+      "Bash(cmd /c \"cd /d D:\\\\vibecode\\\\Resale\\\\tools\\\\reviewer && pnpm cli init demo-project 2>&1\")",
+      "Bash(cmd /c \"cd /d D:\\\\vibecode\\\\Resale\\\\tools\\\\reviewer && pnpm cli init demo-project && exit\")",
+      "Bash(cmd /c \"pnpm -C D:\\\\vibecode\\\\Resale\\\\tools\\\\reviewer cli init demo-project\")",
+      "Bash(cmd /c \"rmdir /S /Q D:\\\\vibecode\\\\Resale\\\\projects\\\\demo-project\")"
     ]
   }
 }
