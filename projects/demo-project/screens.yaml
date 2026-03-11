@@ -1,0 +1,63 @@
+# Screen Registry — Source of Truth for demo-project
+#
+# Every screen the FlowCanvas Reviewer can validate is defined here.
+# This file IS the contract between design (Figma) and implementation (runtime).
+#
+# screen_id naming convention:
+#   {flow_id}_{screen_name}_{variant}
+#   Examples: auth_login_default   dashboard_home_empty   shop_create_step_1_default
+#
+# Figma readiness markers:
+#   node_id: "TODO_FIGMA_NODE_ID"   — unconfigured, auto-skipped by reviewer
+#   node_id: "174:1412"             — ready, included in default runs
+#   reviewer_enabled: false         — explicitly disabled, always skipped
+
+screens:
+
+  # ── Example Screen ──────────────────────────────────────────────────────────
+  # Replace this entry with your real screens.
+  # One entry per reviewable state/variant of a screen.
+
+  - screen_id: home_default
+    flow_id: home
+    step: 1
+    variant: default
+
+    # URL path the reviewer navigates to
+    route: /
+
+    preconditions:
+      auth: false   # set true if the reviewer must log in before navigating here
+
+    setup:
+      strategy: direct   # direct | wizard_inject | action_sequence
+      # For action_sequence, list steps:
+      # strategy: action_sequence
+      # actions:
+      #   - { action: click, selector: '[data-testid="menu-trigger"]' }
+      #   - { action: wait, timeout: 500 }
+
+    figma:
+      # Figma file key — from your Figma file URL:
+      #   https://figma.com/design/FILE_KEY/My-Design/...
+      file_key: "IbgDotENZdgwweTjvF6QR3"
+
+      # Figma node ID — right-click a frame in Figma → Copy link
+      # Extract the node-id param and replace hyphens with colons:
+      #   ?node-id=174-1412  →  "174:1412"
+      node_id: "83:2181"
+
+    viewport: { width: 372, height: 806 }
+
+    # Selectors to black out before diffing (dynamic or environment-specific content)
+    masks: []
+    # masks:
+    #   - selector: "[data-testid='user-avatar']"
+    #     reason: "Profile images differ between environments"
+
+    thresholds:
+      pixel_diff_percent: 0.5       # max % of pixels allowed to differ (0–100)
+      structural_similarity: 0.95   # min SSIM score (0–1, higher = stricter)
+
+    tags: [example]
+    notes: "Example screen — replace with a real screen from your app."

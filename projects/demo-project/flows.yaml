@@ -1,0 +1,18 @@
+# Flows — User Journey Definitions for demo-project
+#
+# Flows group related screens into named user journeys.
+# Used for filtering: pnpm reviewer --project demo-project --flow <flow_id>
+#
+# Optional — remove the flowsFile line from flowcanvas.config.ts if unused.
+
+flows:
+
+  - flow_id: home
+    title: Home
+    entry_route: /
+    nodes:
+      - id: home_default
+        screen_id: home_default
+        route: /
+    edges: []
+    notes: "Example flow — replace with your real user journeys."
